@@ -3,12 +3,14 @@ if os ~= "Win32" and os ~= "Win64" then
     s = "/"
     prefix="";
     if os=="OSX32" or os=="OSX64" then
-      pref="/bin/bash -c ";
+      prefix="/bin/bash -c ";
     end
   else
     s = "\\"
     prefix="\"c:\\Program Files\\Git\\git-bash.exe\" -c ";
   end 
+
+--reaper.ShowConsoleMsg(prefix);
   
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
@@ -68,7 +70,9 @@ end
 
 function isOnServer()
   name,server,username,root=getPrefs();
-  filelist=io.popen('ssh '..username.."@"..server..' \"cd '..root..';ls \''..getSongName()..'\'\"');
+  local cmd='ssh '..username.."@"..server..' \"cd '..root..';ls \''..getSongName()..'\'\"';
+  println(cmd);
+  filelist=io.popen(cmd);
   for filename in filelist:lines() do
     if (filename=="parts") then
       return true;
@@ -145,14 +149,14 @@ end
 
 function run(cmd)
   basepath = reaper.GetProjectPath(0,"");
-  runInPath(basepath,cmd);
+  runSilentlyInPath(basepath,cmd);
 end
 
 function runInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    local cmd = prefix.."\"set -x;cd "..path.." ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
     println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
@@ -161,7 +165,9 @@ function runWithOutput(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    return reaper.ExecProcess(prefix.."\"cd "..path.." ; "..cmd.." ; echo Press Enter...;  read stuff\"",0);
+    cmd = prefix.."\"cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\"";
+    println(cmd);
+    return reaper.ExecProcess(cmd,0);
 end
 
 function fixWindowsPath(path)
@@ -172,7 +178,9 @@ function runSilentlyInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    return reaper.ExecProcess(prefix.."\"cd "..path.." ; "..cmd.." ; \"",0);
+    cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
+    println(cmd);
+    return reaper.ExecProcess(cmd,0);
 end
 
 function trackpull()
@@ -285,8 +293,9 @@ function writePart(person)
 end
 
 function refreshPart(person)
-  index = deletePart(person)
-  importPart(person,index)
+  println("Refreshing "..person);
+ -- index = deletePart(person)
+  importPart(person);
 end
 
 function getFilesInTrack(track, files)
@@ -322,7 +331,11 @@ function encodeFilesInPart(person)
   files=getNewFiles(firstfiles,existing);
   cmd="";
   for k,v in pairs(files) do
+    if os=="OSX32" or os=="OSX64" then
+      cmd=cmd.."/usr/local/bin/oggenc -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+     else
      cmd=cmd.."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+     end
   end
   cmd=cmd.." echo hello";
   if (cmd~="") then 
@@ -330,19 +343,30 @@ function encodeFilesInPart(person)
   end
 end
 
+function runInMacTerminal(cmd)
+  println("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\"echo hello;read\\\"\"");
+  reaper.ExecProcess("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\"echo hello;read\\\"\"",0);
+end
+
 function decodeFilesInPart(person)
-  --print("thing");
+--  print("thing");
   basepath = reaper.GetProjectPath(0,"");
   firstfiles=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
   existing=getFilesInFolder(basepath,"wav");
   files=getNewFiles(firstfiles,existing);
-  --printArray(firstfiles);printArray(existing);printArray(files);
+--  printArray(firstfiles);printArray(existing);printArray(files);
   cmd="";
   for k,v in pairs(files) do
-     cmd=cmd.."oggdec '"..v.."'.ogg -w '../../"..v..".wav';";
+      if os=="OSX32" or os=="OSX64" then
+        cmd=cmd.."/usr/local/bin/oggdec -Q '"..v.."'.ogg -o '../../"..v..".wav';";
+      else
+        cmd=cmd.."oggdec '"..v.."'.ogg -w '../../"..v..".wav';";
+      end
   end
   cmd=cmd.." echo hello";
+--  cmd="/usr/local/bin/oggdec -Q test.ogg";
   if (cmd~="") then 
+--        runInMacTerminal("none");
       runSilentlyInPath(basepath..s.."ogg"..s..person,cmd);
   end
   
@@ -400,6 +424,7 @@ function getTracksInPart(person)
           found=true;
           parent=track;
           min=trackNum;
+          max=trackNum;
         end
       else
         if (reaper.GetTrackDepth(track)<=reaper.GetTrackDepth(parent)) then
@@ -442,7 +467,7 @@ function readPart(person)
   
   files = getTrackFiles(projectPath,person);
   for k,file in pairs(files) do
---    print(file);
+    print(file);
    -- print(file);
     parentguid="-1";
     prevguid="-1";
@@ -610,9 +635,24 @@ function importPart(name)
   
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
-----decodeFilesInPart("Pravesh");
-checkDuplicates("Pravesh");
-checkOrphans("Pravesh");
+
+refresh()
+--decodeFilesInPart("Pravesh");
+--runInMacTerminal("none");
+-- checkDuplicates("Pravesh");
+-- checkOrphans("Pravesh");
+--projectPath = reaper.GetProjectPath(0,"");
+--runSilentlyInPath(projectPath,"touch test.txt");
+--val = isOnServer()
+--if (val) then
+--  println("true");
+--  else
+--  println("false");
+--  end
+--refreshTracks();
+--importPart("Chiraag");
+--importPart("Pravesh");
+--importPart("Mags");
 --refresh();
 --println("Sync complete");
 --setup()
