@@ -368,6 +368,7 @@ function encodeFilesInPart(person)
      end
   end
   cmd=cmd.." echo hello";
+  print(cmd);
   if (cmd~="") then 
       runSilentlyInPath(basepath,cmd);
   end
@@ -603,13 +604,14 @@ end
 
 function refresh()
   name,server,username=getPrefs();
+  println(name);
   maybeSetupRepo();
   checkDuplicates(name);
   checkOrphans(name);
+  encodeFilesInPart(name);
   refreshAudio()
   writePart(name);
   syncRepo();
-  encodeFilesInPart(name);
   pushAudio(name);
   refreshTracks();
   maybeCreateTrack(name);
@@ -670,7 +672,8 @@ function importPart(name)
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
 
-refresh()
+refresh();
+--encodeFilesInPart("Pravesh");
 --checkDuplicates("Pravesh");
 --checkOrphans("Pravesh");
 --runSilentlyInPath(projectPath,"touch test.txt");
