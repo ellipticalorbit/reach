@@ -145,7 +145,7 @@ end
 
 function run(cmd)
   basepath = reaper.GetProjectPath(0,"");
-  runInPath(basepath,cmd);
+  runSilentlyInPath(basepath,cmd);
 end
 
 function runInPath(path, cmd)
@@ -198,12 +198,20 @@ function println(str)
   reaper.ShowConsoleMsg(str.."\n");
 end
 
+function indentHome(index)
+  track=reaper.GetTrack(0,index-1);
+  val=reaper.GetTrackDepth(track);
+  reaper.SetMediaTrackInfo_Value(track,"I_FOLDERDEPTH",-1*val)
+end
+
 function maybeCreateTrack(person)
   tracks,min = getTracksInPart(person);
   if (min==-1) then
-      reaper.InsertTrackAtIndex(reaper.GetNumTracks(),false);
-      track = reaper.GetTrack(0,reaper.GetNumTracks()-1);
-     reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, 1)
+      index=reaper.GetNumTracks();
+      reaper.InsertTrackAtIndex(index,false);
+      track = reaper.GetTrack(0,index);
+      reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, 1)
+      indentHome(index);
     return
   end
 end
@@ -246,12 +254,17 @@ function checkOrphans(person)
   end
 end
 
+function magiclines(s)
+        if s:sub(-1)~="\n" then s=s.."\n" end
+        return s:gmatch("(.-)\n")
+end
+
 function writePart(person)
   reaper.Main_SaveProject(0);
   projectPath = reaper.GetProjectPath(0,"");
  -- reaper.RecursiveCreateDirectory(projectPath..s.."parts",0);
   name=person;
-  tracks,min = getTracksInPart(person);
+  tracks,min,max = getTracksInPart(person);
   if (min==-1) then
     return
   end
@@ -259,18 +272,33 @@ function writePart(person)
   run("rm -rf ".."parts/"..person);
   reaper.RecursiveCreateDirectory(projectPath..s.."parts"..s..person,0) 
   prevguid="-1"
-  for k,track in pairs(tracks) do
-    retval,result=reaper.GetTrackStateChunk(track,"",false);
+  for index=min,max do
+    rtrack =reaper.GetTrack(0,index);
+    retval,result=reaper.GetTrackStateChunk(rtrack,"",false);
 --    println(projectPath);
 --    println(result);
 --    println("->");
-    result=result:gsub("FILE \".*"..s,"FILE \"");
+    output="";
+    for str in magiclines(result) do
+      str=str:gsub("FILE \".*"..s,"FILE \"");
+      output=output.."\n"..str;
+    end
+    result=output;
 --    println("Done");
-    file = io.open(projectPath..s.."parts"..s..person..s..(reaper.GetTrackGUID(track))..".trk","w");
+    file = io.open(projectPath..s.."parts"..s..person..s..(reaper.GetTrackGUID(rtrack))..".trk","w");
     io.output(file);
-    parent = reaper.GetParentTrack(track);
+    parent = reaper.GetParentTrack(rtrack);
+    retval,name=reaper.GetTrackName(rtrack);
+    if (parent~=nil) then
+    retval,pname=reaper.GetTrackName(parent);
+    else
+      pname="None";
+    end
+    print(name .."'s -> parent is "..pname.."\n");
+    --print(parent)
     if (parent~=nil) then
       io.write(reaper.GetTrackGUID(parent).."\n");
+      println(reaper.GetTrackGUID(rtrack).."'s  previous is"..prevguid);
       io.write(prevguid.."\n");
     else
       io.write("-1\n");
@@ -279,7 +307,7 @@ function writePart(person)
    -- io.write((reaper.GetTrackGUID(reaper.GetParentTrack(track))));
     io.write(result);
     io.close(file);
-    prevguid=(reaper.GetTrackGUID(track));
+    prevguid=(reaper.GetTrackGUID(rtrack));
   end
   
 end
@@ -418,7 +446,7 @@ function getTracksInPart(person)
 --      getAllFiles(track);
     end
   end
-  return tracks,min;
+  return tracks,min,max;
 end
 
 function deletePart(person)
@@ -571,10 +599,15 @@ function getIndex(guid)
   return 0;
 end
 
-function addTrack(index,xml)
+function addTrack(index,xml,doIndentHome)
     reaper.InsertTrackAtIndex(index,false);
     track = reaper.GetTrack(0,index);
     reaper.SetTrackStateChunk(track,xml,false);
+    if doIndentHome~=nil then
+       if doIndentHome then
+          indentHome(index);
+       end
+    end
 end
 
 function addAllChildren(trackNum,root,tracks,parents,prevs)
@@ -603,28 +636,29 @@ function importPart(name)
   local root = prevs["-1"];
   prevguid="-1";
   for k,v in pairs(root) do
-    addTrack(trackNum,tracks[k]);
+    addTrack(trackNum,tracks[k],true);
     addNext(k);
   end
   
-  
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
+
 ----decodeFilesInPart("Pravesh");
-checkDuplicates("Pravesh");
-checkOrphans("Pravesh");
+--checkDuplicates("Pravesh");
+--checkOrphans("Pravesh");
+--writePart("Pravesh");
+refreshPart("Pravesh")
+
 --refresh();
 --println("Sync complete");
 --setup()
 --init()
---refreshPart("Chiraag");
 --copyFilesInPart("Pravesh");
 --dealWithItems();
 --refresh();
 --writePart("Pravesh");
 --refreshPart("Chiraag");
 --push();
---refreshPart("Pravesh",0)
 --deletePart("Pravesh");
 --trackclone()
 --trackToString();
