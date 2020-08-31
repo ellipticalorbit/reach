@@ -179,7 +179,7 @@ function runSilentlyInPath(path, cmd)
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
     cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    --println(cmd);
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -207,11 +207,9 @@ function println(str)
 end
 
 function indentHome(index)
-  if (index>0) then 
-    track=reaper.GetTrack(0,index-1);
-    val=reaper.GetTrackDepth(track);
-    reaper.SetMediaTrackInfo_Value(track,"I_FOLDERDEPTH",-1*val)
-  end
+  track=reaper.GetTrack(0,index-1);
+  val=reaper.GetTrackDepth(track);
+  reaper.SetMediaTrackInfo_Value(track,"I_FOLDERDEPTH",-1*val)
 end
 
 function maybeCreateTrack(person)
@@ -304,11 +302,11 @@ function writePart(person)
     else
       pname="None";
     end
-    --print(name .."'s -> parent is "..pname.."\n");
+    print(name .."'s -> parent is "..pname.."\n");
     --print(parent)
     if (parent~=nil) then
       io.write(reaper.GetTrackGUID(parent).."\n");
-      --println(reaper.GetTrackGUID(rtrack).."'s  previous is"..prevguid);
+      println(reaper.GetTrackGUID(rtrack).."'s  previous is"..prevguid);
       io.write(prevguid.."\n");
     else
       io.write("-1\n");
@@ -323,7 +321,7 @@ function writePart(person)
 end
 
 function refreshPart(person)
-  --println("Refreshing "..person);
+  println("Refreshing "..person);
  -- index = deletePart(person)
   importPart(person);
 end
@@ -497,7 +495,7 @@ function readPart(person)
   
   files = getTrackFiles(projectPath,person);
   for k,file in pairs(files) do
-    --print(file);
+    print(file);
    -- print(file);
     parentguid="-1";
     prevguid="-1";
@@ -670,9 +668,20 @@ function importPart(name)
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
 
-refresh()
+<<<<<<< HEAD
+----decodeFilesInPart("Pravesh");
 --checkDuplicates("Pravesh");
 --checkOrphans("Pravesh");
+--writePart("Pravesh");
+refreshPart("Pravesh")
+
+=======
+refresh()
+--decodeFilesInPart("Pravesh");
+--runInMacTerminal("none");
+-- checkDuplicates("Pravesh");
+-- checkOrphans("Pravesh");
+--projectPath = reaper.GetProjectPath(0,"");
 --runSilentlyInPath(projectPath,"touch test.txt");
 --val = isOnServer()
 --if (val) then
@@ -684,6 +693,7 @@ refresh()
 --importPart("Chiraag");
 --importPart("Pravesh");
 --importPart("Mags");
+>>>>>>> 599bbc94271987b2370efd66794230f2a2e1bdd1
 --refresh();
 --println("Sync complete");
 --setup()
