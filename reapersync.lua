@@ -71,7 +71,7 @@ end
 function isOnServer()
   name,server,username,root=getPrefs();
   local cmd='ssh '..username.."@"..server..' \"cd '..root..';ls \''..getSongName()..'\'\"';
-  println(cmd);
+  --println(cmd);
   filelist=io.popen(cmd);
   for filename in filelist:lines() do
     if (filename=="parts") then
@@ -368,7 +368,8 @@ function encodeFilesInPart(person)
      end
   end
   cmd=cmd.." echo hello";
-  print(cmd);
+  --print(cmd);
+  --print(cmd);
   if (cmd~="") then 
       runSilentlyInPath(basepath,cmd);
   end
@@ -604,7 +605,7 @@ end
 
 function refresh()
   name,server,username=getPrefs();
-  println(name);
+  --println(name);
   maybeSetupRepo();
   checkDuplicates(name);
   checkOrphans(name);
