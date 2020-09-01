@@ -362,7 +362,7 @@ function encodeFilesInPart(person)
   cmd="";
   for k,v in pairs(files) do
     if os=="OSX32" or os=="OSX64" then
-      cmd=cmd.."/usr/local/bin/oggenc -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      else
      cmd=cmd.."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      end
@@ -390,13 +390,14 @@ function decodeFilesInPart(person)
   cmd="";
   for k,v in pairs(files) do
       if os=="OSX32" or os=="OSX64" then
-        cmd=cmd.."/usr/local/bin/oggdec -Q '"..v.."'.ogg -o '../../"..v..".wav';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..v.."'.ogg -o '../../"..v..".wav';";
       else
         cmd=cmd.."oggdec '"..v.."'.ogg -w '../../"..v..".wav';";
       end
   end
   cmd=cmd.." echo hello";
 --  cmd="/usr/local/bin/oggdec -Q test.ogg";
+-- println(cmd);
   if (cmd~="") then 
 --        runInMacTerminal("none");
       runSilentlyInPath(basepath..s.."ogg"..s..person,cmd);
@@ -673,7 +674,9 @@ function importPart(name)
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
 
+--decodeFilesInPart("Chiraag");
 refresh();
+println("Project refreshed");
 --encodeFilesInPart("Pravesh");
 --checkDuplicates("Pravesh");
 --checkOrphans("Pravesh");
