@@ -1,7 +1,7 @@
 os = reaper.GetOS(); 
 if os ~= "Win32" and os ~= "Win64" then
     s = "/"
-    prefix="";
+    prefix="xterm -e ";
     if os=="OSX32" or os=="OSX64" then
       prefix="/bin/bash -c ";
     end
@@ -91,7 +91,7 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   run('ssh '..username.."@"..server..' \'cd '..root..';git init --shared --bare \"'..song..'/parts\";mkdir -p \"'..song..'/ogg\";chmod g+ws \"'..song..'/ogg"\'');
+   run('ssh '..username.."@"..server..' \'cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg"\'');
 end
 
 function getParts(basepath)
@@ -179,7 +179,7 @@ function runSilentlyInPath(path, cmd)
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
     cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    --println(cmd);
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -391,6 +391,8 @@ function decodeFilesInPart(person)
   for k,v in pairs(files) do
       if os=="OSX32" or os=="OSX64" then
         cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..v.."'.ogg -o '../../"..v..".wav';";
+      elseif os=="Other" then
+        cmd=cmd.."oggdec '"..v.."'.ogg -o '../../"..v..".wav';";
       else
         cmd=cmd.."oggdec '"..v.."'.ogg -w '../../"..v..".wav';";
       end
@@ -674,9 +676,10 @@ function importPart(name)
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
 
---decodeFilesInPart("Chiraag");
+--encodeFilesInPart("PraveshVocal");
+--writePart("PraveshVocal");
 refresh();
-println("Project refreshed");
+println("Project Refreshed");
 --encodeFilesInPart("Pravesh");
 --checkDuplicates("Pravesh");
 --checkOrphans("Pravesh");
