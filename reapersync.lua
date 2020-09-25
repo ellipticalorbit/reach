@@ -586,6 +586,12 @@ function getPrefFile()
   return kb..s.."Scripts"..s.."syncprefs.ini";
 end
 
+function selfUpdate()
+  kb = reaper.GetResourcePath()
+  path = kb..s.."Scripts"..s.."reach";
+  runInPath(path,"git pull origin master");
+end
+
 function trackclone()
   retval, trackname = reaper.GetUserInputs( "Clone", 1,"Track Name", "" )
   if (trim(trackname)=="") then
@@ -665,14 +671,17 @@ function importPart(name)
   local tracks,parents,prevs=readPart(name,0);
   local root = prevs["-1"];
   prevguid="-1";
+  if root~=nil then
   for k,v in pairs(root) do
     addTrack(trackNum,tracks[k],true);
     addNext(k);
   end
+  end
   
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
-
+--refresh("PraveshVocal");
+--writePart("Chiraag");
 refresh();
 --encodeFilesInPart("Pravesh");
 --checkDuplicates("Pravesh");
@@ -689,7 +698,7 @@ refresh();
 --importPart("Pravesh");
 --importPart("Mags");
 --refresh();
---println("Sync complete");
+println("Sync complete");
 --setup()
 --init()
 --copyFilesInPart("Pravesh");
