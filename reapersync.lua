@@ -673,6 +673,8 @@ function refresh()
   readProperties(name);
   refreshTracks();
   maybeCreateTrack(name);
+  reaper.Main_OnCommand(40047,0); -- rebuild peaks
+  --40047
 end
 
 function getIndex(guid)
