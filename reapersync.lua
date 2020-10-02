@@ -91,7 +91,7 @@ function setupLocalRepo()
 end
 
 function syncRepo(user)
-  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --no-edit origin master; git commit -m 'Still no message';";
+  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --no-edit origin master; git commit -m 'Still no message'";
   run(script);
   writeProperties(user);
   script = "cd parts; git add . --all; git commit -m 'no message';  git push --set-upstream origin master";
@@ -677,6 +677,7 @@ function refresh()
   refreshTracks();
   maybeCreateTrack(name);
   reaper.Main_OnCommand(40047,0); -- rebuild peaks
+  reaper.Main_OnCommand(40491,0); -- unarm all tracks
   --40047
 end
 
