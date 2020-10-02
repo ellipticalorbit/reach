@@ -9,8 +9,8 @@ if os ~= "Win32" and os ~= "Win64" then
     s = "\\"
     prefix="\"c:\\Program Files\\Git\\git-bash.exe\" -c ";
   end 
-basepath = reaper.GetProjectPath(0,"");
-scriptPath = reaper.GetResourcePath()..s.."scripts"..s.."reach";
+
+--reaper.ShowConsoleMsg(prefix);
   
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
@@ -21,48 +21,6 @@ function refreshTracks()
       decodeFilesInPart(file);
       refreshPart(file);
     end
-  end
-end
-
-function writeProperties(user)
-  files=getParts(basepath..s.."parts");
-  found=false;
-  owner=nil;
-  local properties={};
-  for k,file in pairs(files) do
-      --print(file);
-      if reaper.file_exists(basepath..s.."parts"..s..file..s.."properties") then
-        found=true;
-        owner=file; 
-        break;
-      end
-      --println(basepath..s.."parts"..s..file..s.."properties");
-  end
-  if (owner==nil or owner==user) then
-    properties["tempo"]=reaper.Master_GetTempo();
-    owner=user;
-    table.save(properties,basepath..s.."parts"..s..user..s.."properties");
-  end
-  return owner;
-end
-
-function readProperties()
-  files=getParts(basepath..s.."parts");
-  found=false;
-  owner=nil;
-  for k,file in pairs(files) do
-      --print(file);
-      if reaper.file_exists(basepath..s.."parts"..s..file..s.."properties") then
-        found=true;
-        owner=file; 
-        break;
-      end
-      --println(basepath..s.."parts"..s..file..s.."properties");
-  end
-  if (owner~=nil) then
-    properties=table.load(basepath..s.."parts"..s..owner..s.."properties");
-    reaper.SetCurrentBPM(0,properties["tempo"],false);
---    print(properties["tempo"]);
   end
 end
 
@@ -90,13 +48,9 @@ function setupLocalRepo()
   end
 end
 
-function syncRepo(user)
-  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --no-edit origin master; git commit -m 'Still no message';";
+function syncRepo()
+  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --no-edit origin master; git commit -m 'Still no message'; git push --set-upstream origin master";
   run(script);
-  writeProperties(user);
-  script = "cd parts; git add . --all; git commit -m 'no message';  git push --set-upstream origin master";
-  run(script);
-
 end
 
 function maybeSetupRepo()
@@ -225,7 +179,7 @@ function runSilentlyInPath(path, cmd)
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
     cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    --println(cmd);
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -245,7 +199,7 @@ function push()
 end
 
 function print(str)
-  reaper.ShowConsoleMsg(tostring(str));
+  reaper.ShowConsoleMsg(str);
 end
 
 function println(str)
@@ -638,7 +592,7 @@ end
 function selfUpdate()
   kb = reaper.GetResourcePath()
   path = kb..s.."Scripts"..s.."reach";
-  runSilentlyInPath(path,"git pull origin master");
+  runInPath(path,"git pull origin master");
 end
 
 function trackclone()
@@ -667,10 +621,8 @@ function refresh()
   encodeFilesInPart(name);
   refreshAudio()
   writePart(name);
- -- writeProperties(name);
-  syncRepo(name);
+  syncRepo();
   pushAudio(name);
-  readProperties(name);
   refreshTracks();
   maybeCreateTrack(name);
 end
@@ -705,149 +657,6 @@ function addAllChildren(trackNum,root,tracks,parents,prevs)
   end
 end
 
-do
-  -- declare local variables
-  --// exportstring( string )
-  --// returns a "Lua" portable version of the string
-  local function exportstring( s )
-    s = string.format( "%q",s )
-    -- to replace
-    s = string.gsub( s,"\\\n","\\n" )
-    s = string.gsub( s,"\r","\\r" )
-    s = string.gsub( s,string.char(26),"\"..string.char(26)..\"" )
-    return s
-  end
---// The Save Function
-function table.save(  tbl,filename )
-  local charS,charE = "   ","\n"
-  local file,err
-  -- create a pseudo file that writes to a string and return the string
-  if not filename then
-    file =  { write = function( self,newstr ) self.str = self.str..newstr end, str = "" }
-    charS,charE = "",""
-  -- write table to tmpfile
-  elseif filename == true or filename == 1 then
-    charS,charE,file = "","",io.tmpfile()
-  -- write table to file
-  -- use io.open here rather than io.output, since in windows when clicking on a file opened with io.output will create an error
-  else
-    file,err = io.open( filename, "w" )
-    if err then return _,err end
-  end
-  -- initiate variables for save procedure
-  local tables,lookup = { tbl },{ [tbl] = 1 }
-  file:write( "return {"..charE )
-  for idx,t in ipairs( tables ) do
-    if filename and filename ~= true and filename ~= 1 then
-      file:write( "-- Table: {"..idx.."}"..charE )
-    end
-    file:write( "{"..charE )
-    local thandled = {}
-    for i,v in ipairs( t ) do
-      thandled[i] = true
-      -- escape functions and userdata
-      if type( v ) ~= "userdata" then
-        -- only handle value
-        if type( v ) == "table" then
-          if not lookup[v] then
-            table.insert( tables, v )
-            lookup[v] = #tables
-          end
-          file:write( charS.."{"..lookup[v].."},"..charE )
-        elseif type( v ) == "function" then
-          file:write( charS.."loadstring("..exportstring(string.dump( v )).."),"..charE )
-        else
-          local value =  ( type( v ) == "string" and exportstring( v ) ) or tostring( v )
-          file:write(  charS..value..","..charE )
-        end
-      end
-    end
-    for i,v in pairs( t ) do
-      -- escape functions and userdata
-      if (not thandled[i]) and type( v ) ~= "userdata" then
-        -- handle index
-        if type( i ) == "table" then
-          if not lookup[i] then
-            table.insert( tables,i )
-            lookup[i] = #tables
-          end
-          file:write( charS.."[{"..lookup[i].."}]=" )
-        else
-          local index = ( type( i ) == "string" and "["..exportstring( i ).."]" ) or string.format( "[%d]",i )
-          file:write( charS..index.."=" )
-        end
-        -- handle value
-        if type( v ) == "table" then
-          if not lookup[v] then
-            table.insert( tables,v )
-            lookup[v] = #tables
-          end
-          file:write( "{"..lookup[v].."},"..charE )
-        elseif type( v ) == "function" then
-          file:write( "loadstring("..exportstring(string.dump( v )).."),"..charE )
-        else
-          local value =  ( type( v ) == "string" and exportstring( v ) ) or tostring( v )
-          file:write( value..","..charE )
-        end
-      end
-    end
-    file:write( "},"..charE )
-  end
-  file:write( "}" )
-  -- Return Values
-  -- return stringtable from string
-  if not filename then
-    -- set marker for stringtable
-    return file.str.."--|"
-  -- return stringttable from file
-  elseif filename == true or filename == 1 then
-    file:seek ( "set" )
-    -- no need to close file, it gets closed and removed automatically
-    -- set marker for stringtable
-    return file:read( "*a" ).."--|"
-  -- close file and return 1
-  else
-    file:close()
-    return 1
-  end
-end
-
---// The Load Function
-function table.load( sfile )
-  local tables, err, _
-  -- catch marker for stringtable
-  if string.sub( sfile,-3,-1 ) == "--|" then
-    tables,err = loadstring( sfile )
-  else
-    tables,err = loadfile( sfile )
-  end
-  if err then return _,err
-  end
-  tables = tables()
-  for idx = 1,#tables do
-    local tolinkv,tolinki = {},{}
-    for i,v in pairs( tables[idx] ) do
-      if type( v ) == "table" and tables[v[1]] then
-        table.insert( tolinkv,{ i,tables[v[1]] } )
-      end
-      if type( i ) == "table" and tables[i[1]] then
-        table.insert( tolinki,{ i,tables[i[1]] } )
-      end
-    end
-    -- link values, first due to possible changes of indices
-    for _,v in ipairs( tolinkv ) do
-      tables[idx][v[1]] = v[2]
-    end
-    -- link indices
-    for _,v in ipairs( tolinki ) do
-      tables[idx][v[2]],tables[idx][v[1]] =  tables[idx][v[1]],nil
-    end
-  end
-  return tables[1]
-end
--- close do
-end
-
 function addNext(root)
   local index=getIndex(root)+1;
   --println(root);
@@ -874,13 +683,14 @@ function importPart(name)
   
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
-
---writeProperties("Neil");
+<<<<<<< HEAD
 --refresh("PraveshVocal");
 --writePart("Chiraag");
+=======
+
+--encodeFilesInPart("PraveshVocal");
 --writePart("PraveshVocal");
-selfUpdate();
---readProperties();
+>>>>>>> a9ad0cd0ede1791cffa07b2d3cf24bd5f1c544ef
 refresh();
 println("Project Refreshed");
 --encodeFilesInPart("Pravesh");
@@ -898,7 +708,7 @@ println("Project Refreshed");
 --importPart("Pravesh");
 --importPart("Mags");
 --refresh();
---println("Sync complete");
+println("Sync complete");
 --setup()
 --init()
 --copyFilesInPart("Pravesh");
