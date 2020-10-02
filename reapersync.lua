@@ -161,8 +161,11 @@ function getTrackFiles(basepath,person)
   while true do  --iterate and store files in project folder
       local file=reaper.EnumerateFiles(basepath..s.."parts"..s..person, index)
       if file then
+        if file~="properties" then
           files[file]=file;
-          index=index+1
+          
+        end
+        index=index+1
       else
           break
       end
