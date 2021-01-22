@@ -85,7 +85,7 @@ function setupLocalRepo()
   if (result) then
     clone();
   else
-    createRemoteRepo()
+    createRemoteRepo();
     clone();
   end
 end
@@ -117,7 +117,7 @@ end
 function isOnServer()
   name,server,username,root=getPrefs();
   local cmd='ssh '..username.."@"..server..' \"cd '..root..';ls \''..getSongName()..'\'\"';
-  --println(cmd);
+  println(cmd);
   filelist=io.popen(cmd);
   for filename in filelist:lines() do
     if (filename=="parts") then
@@ -137,7 +137,7 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   run('ssh '..username.."@"..server..' \'cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg"\'');
+   run('ssh '..username.."@"..server..' "cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg"');
 end
 
 function getParts(basepath)
@@ -205,7 +205,6 @@ function runInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
     println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
@@ -227,19 +226,11 @@ function runSilentlyInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    --println(cmd);
+    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+ 
+    --cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
-end
-
-function trackpull()
-  reaper.Main_SaveProject(0);
-  projectName = reaper.GetProjectPath(0,"");
-  result = runInPath(projectName,"trackpull");
-  if (result) then
-    reaper.ShowConsoleMsg("Pulled current track\n");
-    reload()
-  end
 end
 
 function push()
@@ -420,7 +411,7 @@ function encodeFilesInPart(person)
   --print(cmd);
   --print(cmd);
   if (cmd~="") then 
-      runSilentlyInPath(basepath,cmd);
+      run(cmd);
   end
 end
 
@@ -885,7 +876,7 @@ end
 --refresh("PraveshVocal");
 --writePart("Chiraag");
 --writePart("PraveshVocal");
-selfUpdate();
+--selfUpdate();
 --readProperties();
 refresh();
 println("Project Refreshed");
