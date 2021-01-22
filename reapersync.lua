@@ -226,10 +226,10 @@ function runSilentlyInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    --cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    println(cmd);
+    cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
+    --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -876,7 +876,7 @@ end
 --refresh("PraveshVocal");
 --writePart("Chiraag");
 --writePart("PraveshVocal");
---selfUpdate();
+selfUpdate();
 --readProperties();
 refresh();
 println("Project Refreshed");
