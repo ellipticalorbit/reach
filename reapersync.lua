@@ -137,7 +137,7 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   run('ssh '..username.."@"..server..' "cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg"');
+   run('ssh '..username.."@"..server..' \\\"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\\\"');
 end
 
 function getParts(basepath)
@@ -219,7 +219,7 @@ function runWithOutput(path, cmd)
 end
 
 function fixWindowsPath(path)
-  return "/"..path:gsub(":",""):gsub("\\","/")
+  return "/"..path:gsub(":",""):gsub("\\","/");
 end
 
 function runSilentlyInPath(path, cmd)
@@ -228,7 +228,7 @@ function runSilentlyInPath(path, cmd)
     end
     --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
+    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
     --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
@@ -872,39 +872,6 @@ function importPart(name)
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
 
---writeProperties("Neil");
---refresh("PraveshVocal");
---writePart("Chiraag");
---writePart("PraveshVocal");
 selfUpdate();
---readProperties();
 refresh();
 println("Project Refreshed");
---encodeFilesInPart("Pravesh");
---checkDuplicates("Pravesh");
---checkOrphans("Pravesh");
---runSilentlyInPath(projectPath,"touch test.txt");
---val = isOnServer()
---if (val) then
---  println("true");
---  else
---  println("false");
---  end
---refreshTracks();
---importPart("Chiraag");
---importPart("Pravesh");
---importPart("Mags");
---refresh();
---println("Sync complete");
---setup()
---init()
---copyFilesInPart("Pravesh");
---dealWithItems();
---refresh();
---writePart("Pravesh");
---refreshPart("Chiraag");
---push();
---deletePart("Pravesh");
---trackclone()
---trackToString();
--- reload();
