@@ -117,7 +117,7 @@ end
 function isOnServer()
   name,server,username,root=getPrefs();
   local cmd='ssh '..username.."@"..server..' \"cd '..root..';ls \''..getSongName()..'\'\"';
-  println(cmd);
+  --println(cmd);
   filelist=io.popen(cmd);
   for filename in filelist:lines() do
     if (filename=="parts") then
