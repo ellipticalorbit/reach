@@ -25,6 +25,7 @@ function refreshTracks()
 end
 
 function writeProperties(user)
+  reaper.ShowConsoleMsg("Writing properties\n");
   files=getParts(basepath..s.."parts");
   found=false;
   owner=nil;
