@@ -39,7 +39,9 @@ function writeProperties(user)
       end
       --println(basepath..s.."parts"..s..file..s.."properties");
   end
+  print(owner);
   if (owner==nil or owner==user) then
+    print("Writing tempo");
     properties["tempo"]=reaper.Master_GetTempo();
     owner=user;
     table.save(properties,basepath..s.."parts"..s..user..s.."properties");
@@ -138,7 +140,7 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   run('ssh '..username.."@"..server..' \\\"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\\\"');
+   run('ssh '..username.."@"..server..' \"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\"');
 end
 
 function getParts(basepath)
@@ -230,7 +232,7 @@ function runSilentlyInPath(path, cmd)
     --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
     local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    --println(cmd);
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -320,7 +322,7 @@ function writePart(person)
     return
   end
   
-  run("rm -rf ".."parts/"..person);
+  run("rm -rf ".."parts/"..person.."/*.trk");
   reaper.RecursiveCreateDirectory(projectPath..s.."parts"..s..person,0) 
   prevguid="-1"
   for index=min,max do
