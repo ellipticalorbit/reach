@@ -84,8 +84,10 @@ end
 function setupLocalRepo()
   result = isOnServer();
   if (result) then
+    println("Is on Server");
     clone();
   else
+    println("Is not on Server");
     createRemoteRepo();
     clone();
   end
@@ -104,6 +106,7 @@ function maybeSetupRepo()
    basepath = reaper.GetProjectPath(0,"");
    if exists(basepath,"parts") then
    else
+--      println("Setting up repo");
       setupLocalRepo();
    end
 end
@@ -138,7 +141,7 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   run('ssh '..username.."@"..server..' \\\"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\\\"');
+   io.popen('ssh '..username.."@"..server..' \"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\"');
 end
 
 function getParts(basepath)
@@ -655,14 +658,13 @@ end
 
 function refresh()
   name,server,username=getPrefs();
-  --println(name);
+--  println(name);
   maybeSetupRepo();
   checkDuplicates(name);
   checkOrphans(name);
   encodeFilesInPart(name);
   refreshAudio()
   writePart(name);
- -- writeProperties(name);
   syncRepo(name);
   pushAudio(name);
   readProperties(name);
