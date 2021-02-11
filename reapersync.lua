@@ -235,7 +235,7 @@ function runSilentlyInPath(path, cmd)
     --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
     local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
-    println(cmd);
+    --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
