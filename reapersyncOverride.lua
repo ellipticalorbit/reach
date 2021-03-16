@@ -3,5 +3,5 @@ function reaperDoFile(file) local info = debug.getinfo(1,'S'); script_path = inf
 reaperDoFile("reapersynclib.lua");
 
 selfUpdate();
-refresh();
+refreshWithOverride();
 println("Project Refreshed");
