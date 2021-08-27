@@ -11,7 +11,7 @@ if os ~= "Win32" and os ~= "Win64" then
   end 
 basepath = reaper.GetProjectPath(0,"");
 scriptPath = reaper.GetResourcePath()..s.."scripts"..s.."reach";
-  
+ctime=0;
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
   --files = scandir(basepath)
@@ -20,6 +20,7 @@ function refreshTracks()
     if (file~=".git") then 
       decodeFilesInPart(file);
       refreshPart(file);
+      checkTime(ctime, "Done with "..file);
     end
   end
 end
@@ -56,18 +57,18 @@ function readProperties()
   local found=false;
   local owner=nil;
   for k,file in pairs(files) do
-      --print(file);
+      print(file);
       if reaper.file_exists(basepath..s.."parts"..s..file..s.."properties") then
         found=true;
         owner=file; 
         break;
       end
-      --println(basepath..s.."parts"..s..file..s.."properties");
+      println(basepath..s.."parts"..s..file..s.."properties");
   end
   if (owner~=nil) then
     local properties=table.load(basepath..s.."parts"..s..owner..s.."properties");
     reaper.SetCurrentBPM(0,properties["tempo"],false);
---    print(properties["tempo"]);
+    print(properties["tempo"]); 
   end
 end
 
@@ -228,16 +229,17 @@ function runWithOutput(path, cmd)
 end
 
 function fixWindowsPath(path)
-  return "/"..path:gsub(":",""):gsub("\\","/");
+  return "/"..path:gsub(":",""):gsub("\\","/"); 
 end
 
 function runSilentlyInPath(path, cmd)
+    --println("In runsiletly in path");
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
     --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." ; \"";
+    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
     --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
@@ -262,6 +264,14 @@ function indentHome(index)
     reaper.SetMediaTrackInfo_Value(track,"I_FOLDERDEPTH",-1*val)
   end
 end
+
+function indent(index,level)
+  if (index>1) then 
+    track=reaper.GetTrack(0,index-2);
+    val=reaper.GetTrackDepth(track);
+    reaper.SetMediaTrackInfo_Value(track,"I_FOLDERDEPTH",level-val)
+  end
+end 
 
 function maybeCreateTrack(person)
   tracks,min = getTracksInPart(person);
@@ -318,6 +328,36 @@ function magiclines(s)
         return s:gmatch("(.-)\n")
 end
 
+--function GetTrackChunk(track)
+--  if not track then return end
+--  local fast_str, track_chunk
+--  fast_str = reaper.SNM_CreateFastString("")
+--  if reaper.SNM_GetSetObjectState(track, fast_str, false, false) then
+--    track_chunk = reaper.SNM_GetFastString(fast_str)
+--  end
+--  reaper.SNM_DeleteFastString(fast_str)  
+--  return track_chunk
+--end
+
+function GetTrackChunk(track)
+  if not track then return end
+  -- Try standard function -----
+  local ret, track_chunk = reaper.GetTrackStateChunk(track, "", false) -- isundo = false
+  if ret and track_chunk and #track_chunk < 4194303 then return track_chunk end
+  -- If chunk_size >= max_size, use wdl fast string --
+  local fast_str = reaper.SNM_CreateFastString("")
+  if reaper.SNM_GetSetObjectState(track, fast_str, false, false) then
+    track_chunk = reaper.SNM_GetFastString(fast_str)
+  end
+  reaper.SNM_DeleteFastString(fast_str)
+  if track_chunk then return track_chunk end
+end
+
+function SetTrackChunk(track, track_chunk)
+  if not (track and track_chunk) then return end
+  return reaper.SetTrackStateChunk(track, track_chunk, false)
+end
+
 function writePart(person)
   reaper.Main_SaveProject(0);
   projectPath = reaper.GetProjectPath(0,"");
@@ -333,7 +373,7 @@ function writePart(person)
   prevguid="-1"
   for index=min,max do
     rtrack =reaper.GetTrack(0,index);
-    retval,result=reaper.GetTrackStateChunk(rtrack,"",false);
+    result=GetTrackChunk(rtrack);
 --    println(projectPath);
 --    println(result);
 --    println("->");
@@ -374,7 +414,10 @@ end
 function refreshPart(person)
   --println("Refreshing "..person);
  -- index = deletePart(person)
+  
   importPart(person);
+  ctime=checkTime(ctime, "Imported "..person);
+ -- print("Done with "..person);
 end
 
 function getFilesInTrack(track, files)
@@ -443,12 +486,12 @@ function decodeFilesInPart(person)
       elseif os=="Other" then
         cmd=cmd.."oggdec '"..v.."'.ogg -o '../../"..v..".wav';";
       else
-        cmd=cmd.."oggdec '"..v.."'.ogg -w '../../"..v..".wav';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\oggdec' '"..v.."'.ogg -w '../../"..v..".wav';";
       end
   end
-  cmd=cmd.." echo hello";
+--  cmd=cmd.." echo hello";
 --  cmd="/usr/local/bin/oggdec -Q test.ogg";
--- println(cmd);
+--  println(cmd);
   if (cmd~="") then 
 --        runInMacTerminal("none");
       runSilentlyInPath(basepath..s.."ogg"..s..person,cmd);
@@ -548,37 +591,33 @@ function readPart(person)
   tracks = {};
   parents = {};
   prevs = {};
-  
+  ctime=reaper.time_precise();
   files = getTrackFiles(projectPath,person);
+  --ctime=checkTime(ctime, "Done getting files");
   for k,file in pairs(files) do
+    --ctime=checkTime(ctime,"Reading file "..file);
     --print(file);
    -- print(file);
     parentguid="-1";
     prevguid="-1";
     lines="";
-  --  print(projectPath..s.."parts"..s..person..s..file);
+  --  print(projectPath..s.."parts"..s..person..s..file); 
     pos = 0;
-    for line in io.lines(projectPath..s.."parts"..s..person..s..file) do
-      if (pos==0) then parentguid=line;pos=pos+1
-        elseif (pos==1) then prevguid=line;pos=pos+1
-        else lines= lines.."\n"..line
-      end
-    end    
-
-    trackNum  = index; 
-    --print(lines);
-    --reaper.InsertTrackAtIndex(trackNum,false);
-    --track = reaper.GetTrack(0,trackNum);
+    local file1 = io.open(projectPath..s.."parts"..s..person..s..file, "rb")
+    parentguid=trim(file1:read "*line");
+    prevguid=trim(file1:read "*line");
+    file1:read "*line";
+    lines=file1:read "*a";
+    io.close(file1);
+    
+    
     if (trim(lines)~="") then
       tracks[file:gsub(".trk","")]=lines;
-      if (parents[parentguid]==nil) then
-        parents[parentguid]={}
-        end
       if (prevs[prevguid]==nil) then
          prevs[prevguid]={}
          end
       
-      parents[parentguid][file:gsub(".trk","")]=file:gsub(".trk","");
+      parents[file:gsub(".trk","")]=parentguid;
       prevs[prevguid][file:gsub(".trk","")]=file:gsub(".trk","");
     --reaper.SetTrackStateChunk(track,lines,false);
     lines="";
@@ -588,6 +627,10 @@ function readPart(person)
   return tracks, parents, prevs;
   --printArray(tracks);
   
+end
+
+function pause()
+  retval, vals,other = reaper.GetUserInputs( "Pause", 4,"Ignore this", "" )
 end
 
 function setup()
@@ -662,22 +705,91 @@ function trackclone()
 end
 
 function refresh()
-  name,server,username=getPrefs();
+ name,server,username=getPrefs();
 --  println(name);
+  reaper.Undo_BeginBlock(); 
   local user=name;
+  ctime = reaper.time_precise(); 
+  print(ctime);
   maybeSetupRepo();
+  ctime=checkTime(ctime, "Setup repo");
   checkDuplicates(user);
+  ctime=checkTime(ctime, "Check Duplicates");
   checkOrphans(user);
-  encodeFilesInPart(user);
+  ctime=checkTime(ctime, "Check Orphans");
+  encodeFilesInPart(user); 
+  ctime=checkTime(ctime, "Encode My Files");
   refreshAudio()
+  ctime=checkTime(ctime, "Refresh Audio");
   writePart(user);
+  ctime=checkTime(ctime, "Write Track Files");
   syncRepo(user);
+  ctime=checkTime(ctime, "Sync Repo");
   pushAudio(user);
+  ctime=checkTime(ctime, "Push Audio");
   readProperties(user);
+  ctime=checkTime(ctime, "Read Tempo");
   refreshTracks();
+  ctime=checkTime(ctime, "Load Tracks into Reaper");
   maybeCreateTrack(user);
+  ctime=checkTime(ctime, "Create Track For Me");
   reaper.Main_OnCommand(40047,0); -- rebuild peaks
+  ctime=checkTime(ctime, "Rebuild Peaks");
   reaper.Main_OnCommand(40491,0); -- unarm all tracks
+  ctime=checkTime(ctime, "Unarm All Tracks");
+  reaper.Undo_EndBlock("Sync",0);
+  ctime=checkTime(ctime, "Done");
+  --40047
+end
+
+function pull()
+ name,server,username=getPrefs();
+--  println(name);
+  reaper.Undo_BeginBlock(); 
+  local user=name;
+  ctime = reaper.time_precise(); 
+  maybeSetupRepo();
+  ctime=checkTime(ctime, "Setup repo");
+  checkDuplicates(user);
+  ctime=checkTime(ctime, "Check Duplicates");
+  checkOrphans(user);
+  ctime=checkTime(ctime, "Check Orphans");
+  refreshAudio()
+  ctime=checkTime(ctime, "Refresh Audio");
+  syncRepo(user);
+  ctime=checkTime(ctime, "Sync Repo");
+  readProperties(user);
+  ctime=checkTime(ctime, "Read Tempo");
+  refreshTracks();
+  ctime=checkTime(ctime, "Load Tracks into Reaper");
+  maybeCreateTrack(user);
+  ctime=checkTime(ctime, "Create Track For Me");
+  reaper.Main_OnCommand(40047,0); -- rebuild peaks
+  ctime=checkTime(ctime, "Rebuild Peaks");
+  reaper.Main_OnCommand(40491,0); -- unarm all tracks
+  ctime=checkTime(ctime, "Unarm All Tracks");
+  reaper.Undo_EndBlock("Sync",0);
+  ctime=checkTime(ctime, "Done");
+  --40047
+end
+
+function refreshFromFiles()
+ name,server,username=getPrefs();
+--  println(name);
+  reaper.Undo_BeginBlock(); 
+  local user=name;
+  readProperties(user);
+  ctime=checkTime(ctime, "Read Tempo");
+  refreshTracks();
+  ctime=checkTime(ctime, "Load Tracks into Reaper");
+  maybeCreateTrack(user);
+  ctime=checkTime(ctime, "Create Track For Me");
+  reaper.Main_OnCommand(40047,0); -- rebuild peaks
+  ctime=checkTime(ctime, "Rebuild Peaks");
+  reaper.Main_OnCommand(40491,0); -- unarm all tracks
+  ctime=checkTime(ctime, "Unarm All Tracks");
+  reaper.Undo_EndBlock("Sync",0);
+  ctime=checkTime(ctime, "Done");
   --40047
 end
 
@@ -685,20 +797,22 @@ function refreshWithOverride()
   name,server,username=getPrefs();
   local user=name;
   retval, otherguy,other = reaper.GetUserInputs( "Refresh", 1,"Other Guy", "" )
-  maybeSetupRepo();
-  checkDuplicates(user);
-  checkOrphans(user);
-  encodeFilesInPart(user);
-  refreshAudio()
+--  maybeSetupRepo();
+--  checkDuplicates(user);
+--  checkOrphans(user);
+--  encodeFilesInPart(user);
+--  refreshAudio()
+  reaper.Undo_BeginBlock(); 
   writePart(user);
   writePart(otherguy);
   syncRepo(user);
-  pushAudio(user);
-  readProperties(user);
+--  pushAudio(user);
+--  readProperties(user);
   refreshTracks();
-  maybeCreateTrack(user);
+ -- maybeCreateTrack(user);
   reaper.Main_OnCommand(40047,0); -- rebuild peaks
   reaper.Main_OnCommand(40491,0); -- unarm all tracks
+  reaper.Undo_EndBlock("Sync",0);
   --40047
 end
 
@@ -714,15 +828,110 @@ function getIndex(guid)
   return 0;
 end
 
-function addTrack(index,xml,doIndentHome)
-    reaper.InsertTrackAtIndex(index,false);
-    track = reaper.GetTrack(0,index);
-    reaper.SetTrackStateChunk(track,xml,false);
-    if doIndentHome~=nil then
-       if doIndentHome then
-          indentHome(index);
-       end
+function getTrackByGUID(guid)
+  local track;
+  for trackNum=0,reaper.GetNumTracks()-1 do
+    track=reaper.GetTrack(0,trackNum);
+    --print(reaper.GetTrackGUID(track));
+    if reaper.GetTrackGUID(track)==guid then
+      return track
     end
+  end
+  return nil;
+end
+
+function SetTrackChunk(track, track_chunk)
+  if not (track and track_chunk) then return end
+  local fast_str, ret
+  fast_str = reaper.SNM_CreateFastString("")
+  if reaper.SNM_SetFastString(fast_str, track_chunk) then
+    ret = reaper.SNM_GetSetObjectState(track, fast_str, true, false)
+  end
+  reaper.SNM_DeleteFastString(fast_str)
+  return ret
+end
+
+function addTrack(id,index,xml,parent,doIndentHome)
+    curTrack=getTrackByGUID(id);
+    if (curTrack~=nil) then 
+    --ctime=checkTime(ctime, "Reading "..id);
+      result=GetTrackChunk(curTrack); 
+      --ctime=checkTime(ctime, "Read "..id);
+      output="";
+      for str in magiclines(result) do
+        str=str:gsub("FILE \".*"..s,"FILE \"");
+        output=output.."\n"..str;
+      end
+      --result=output:gsub(" ",""):gsub("\n",""):gsub("\r","");
+      result=output:gsub("\r","");
+      --xml=xml:gsub(" ",""):gsub("\n",""):gsub("\r","");print("----------\n");
+      xml=xml:gsub("\r","");
+      --print("----------\n");
+      --print(trim(result));
+      --print("----------\n");
+      --print(trim(xml));
+      --print("----------\n");
+      if (trim(result)==trim(xml)) then
+         print(id.." - unmodified \n");
+        -- ctime=checkTime(ctime, "Imported "..id);
+      else 
+         print(id.." - modified \n");
+         --print(index);
+         reaper.DeleteTrack(curTrack);
+          reaper.InsertTrackAtIndex(index,false);
+          track = reaper.GetTrack(0,index);
+          reaper.SetTrackStateChunk(track,xml);
+           local parent=getTrackByGUID(parent);
+          if (parent~=nil) then
+            val=reaper.GetTrackDepth(parent);
+            indent(index+1,val+1);
+          else
+           -- print("Setting to root "..tostring(index));
+            indent(index+1,0);  
+          end
+         ctime=debugTime(ctime, "Imported track: "..id);
+return 0;
+      end
+      --print(index);
+      reaper.SetOnlyTrackSelected(curTrack,true);
+      reaper.ReorderSelectedTracks(index,1);
+     
+      local parent=getTrackByGUID(parent);
+      if (parent~=nil) then
+        val=reaper.GetTrackDepth(parent);
+        indent(index+1,val+1);
+      else
+        indent(index+1,0);  
+      end
+      --ctime=checkTime(ctime, "Imported track: "..id);
+      return 0;
+        
+
+      else
+      --print(index);
+      reaper.InsertTrackAtIndex(index,false);
+      track = reaper.GetTrack(0,index);
+      reaper.SetTrackStateChunk(track,xml);
+       local parent=getTrackByGUID(parent);
+      if (parent~=nil) then
+        val=reaper.GetTrackDepth(parent);
+        indent(index+1,val+1);
+      else
+        --print("Setting to root "..tostring(index));
+        indent(index+1,0);  
+      end
+     --ctime=checkTime(ctime, "Imported track: "..id);
+      
+--  if doIndentHome~=nil then
+--       if doIndentHome then
+--          indentHome(index-1);
+--       end
+--    end
+  --track=reaper.GetTrack(curIndex);
+  return 0;
+    end
+    
+
 end
 
 function addAllChildren(trackNum,root,tracks,parents,prevs)
@@ -876,30 +1085,62 @@ end
 -- close do
 end
 
-function addNext(root)
+function addNext(root, parents)
   local index=getIndex(root)+1;
   --println(root);
   if (prevs[root]~=nil) then 
   for k,v in pairs(prevs[root]) do
-    addTrack(index,tracks[k])
-    addNext(k);
+    --println("trackNum:"..index);
+    addTrack(k,index,tracks[k], parents[k])
+    addNext(k,parents);
   end
   end
 end
 
+function checkTime(ctime, name)
+  print(name.."\t"..tostring(reaper.time_precise()-ctime).."\n");
+  ctime=reaper.time_precise();
+  return ctime;
+end
 
+function debugTime(ctime, name)
+  print(name.."\t"..tostring(reaper.time_precise()-ctime).."\n");
+  --pause();
+  ctime=reaper.time_precise();
+  return ctime;
+end
+
+ 
 function importPart(name)
-  local trackNum = deletePart(name);
+  local trackser,pos=getTracksInPart(name);
+--  ctime=checkTime(ctime, "getTracksInPart ");
+  
+  --local pos = deletePart(name);
+  if (pos==-1) then
+    pos=reaper.GetNumTracks();
+  end
+  local trackNum = pos;
   local tracks,parents,prevs=readPart(name,0);
+--  ctime=checkTime(ctime, "read part ");
   local root = prevs["-1"];
   prevguid="-1";
   if root~=nil then
+  reaper.InsertTrackAtIndex(trackNum,false);
+  empty=reaper.GetTrack(0,trackNum);
+  indent(trackNum+1,0); 
   for k,v in pairs(root) do
-    addTrack(trackNum,tracks[k],true);
-    addNext(k);
-  end
+    --print("Tracknum:"..trackNum);
+    addTrack(k,trackNum,tracks[k],parents[k],true);
+    addNext(k, parents);
+ end
+  reaper.DeleteTrack(empty);
   end
   
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
-
+--  max=reaper.GetNumTracks()-1
+--  for trackNum=0,reaper.GetNumTracks()-1 do
+--      track = reaper.GetTrack(0,trackNum);
+--      print(trackNum.." - "..reaper.GetTrackGUID(track).."\n");
+--  end
+--decodeFilesInPart("Chiraag");
