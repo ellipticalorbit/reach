@@ -20,7 +20,7 @@ function refreshTracks()
     if (file~=".git") then 
       decodeFilesInPart(file);
       refreshPart(file);
-      checkTime(ctime, "Done with "..file);
+      --checkTime(ctime, "Done with "..file);
     end
   end
 end
@@ -89,10 +89,10 @@ end
 function setupLocalRepo()
   result = isOnServer();
   if (result) then
-    println("Is on Server");
+  --  println("Is on Server");
     clone();
   else
-    println("Is not on Server");
+  --  println("Is not on Server");
     createRemoteRepo();
     clone();
   end
@@ -872,10 +872,10 @@ function addTrack(id,index,xml,parent,doIndentHome)
       --print(trim(xml));
       --print("----------\n");
       if (trim(result)==trim(xml)) then
-         print(id.." - unmodified \n");
-        -- ctime=checkTime(ctime, "Imported "..id);
+         --print(id.." - unmodified \n");
+         ctime=checkTime(ctime, "Unmodified "..id);
       else 
-         print(id.." - modified \n");
+         --print(id.." - modified \n");
          --print(index);
          reaper.DeleteTrack(curTrack);
           reaper.InsertTrackAtIndex(index,false);
@@ -889,7 +889,7 @@ function addTrack(id,index,xml,parent,doIndentHome)
            -- print("Setting to root "..tostring(index));
             indent(index+1,0);  
           end
-         ctime=debugTime(ctime, "Imported track: "..id);
+         ctime=debugTime(ctime, "Modified track: "..id);
 return 0;
       end
       --print(index);
@@ -920,7 +920,7 @@ return 0;
         --print("Setting to root "..tostring(index));
         indent(index+1,0);  
       end
-     --ctime=checkTime(ctime, "Imported track: "..id);
+     ctime=checkTime(ctime, "Imported track: "..id);
       
 --  if doIndentHome~=nil then
 --       if doIndentHome then
@@ -1098,13 +1098,13 @@ function addNext(root, parents)
 end
 
 function checkTime(ctime, name)
-  print(name.."\t"..tostring(reaper.time_precise()-ctime).."\n");
+  print(tostring(reaper.time_precise()-ctime).."\t"..name.."\n");
   ctime=reaper.time_precise();
   return ctime;
 end
 
 function debugTime(ctime, name)
-  print(name.."\t"..tostring(reaper.time_precise()-ctime).."\n");
+  print(tostring(reaper.time_precise()-ctime).."\t"..name.."\n");
   --pause();
   ctime=reaper.time_precise();
   return ctime;
@@ -1120,7 +1120,16 @@ function importPart(name)
     pos=reaper.GetNumTracks();
   end
   local trackNum = pos;
+  
+  
   local tracks,parents,prevs=readPart(name,0);
+  
+  for k,track in pairs(trackser) do
+    if (tracks[k]==nil) then
+      reaper.DeleteTrack(getTrackByGUID(k));
+    end
+  end
+  
 --  ctime=checkTime(ctime, "read part ");
   local root = prevs["-1"];
   prevguid="-1";
