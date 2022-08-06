@@ -6,11 +6,12 @@ if os ~= "Win32" and os ~= "Win64" then
       prefix="/bin/bash -c ";
     end
   else
-    s = "\\"
+    s = "/"
     prefix="\"c:\\Program Files\\Git\\git-bash.exe\" -c ";
   end 
 basepath = reaper.GetProjectPath(0,"");
 scriptPath = reaper.GetResourcePath()..s.."scripts"..s.."reach";
+bashScriptPath="/".. string.gsub(string.gsub( scriptPath,"\\","/" ),":","");
 ctime=0;
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
@@ -75,14 +76,14 @@ end
 function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script="rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+  script=bashScriptPath..s.."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
   run(script);
 end
 
 function pushAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script="rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
+  script=bashScriptPath..s.."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
   run(script);
 end
 
@@ -231,22 +232,27 @@ end
 function fixWindowsPath(path)
   return "/"..path:gsub(":",""):gsub("\\","/"); 
 end
-
+ 
 function runSilentlyInPath(path, cmd)
     --println("In runsiletly in path");
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
-    --println(cmd);
+    --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
+    println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
 function push()
   name,server,username=getPrefs();
   writePart(name);
+  ctime=checkTime(ctime, "Writing Tracks");
+  syncRepo(name);
+  ctime=checkTime(ctime, "Sync Repo");
+  pushAudio(name);
+  ctime=checkTime(ctime, "Push Audio");
 end
 
 function print(str)
@@ -456,7 +462,7 @@ function encodeFilesInPart(person)
     if os=="OSX32" or os=="OSX64" then
       cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      else
-     cmd=cmd.."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+     cmd=cmd..bashScriptPath..s.."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      end
   end
   cmd=cmd.." echo hello";
@@ -484,7 +490,7 @@ function decodeFilesInPart(person)
       if os=="OSX32" or os=="OSX64" then
         cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..v.."'.ogg -o '../../"..v..".wav';";
       elseif os=="Other" then
-        cmd=cmd.."oggdec '"..v.."'.ogg -o '../../"..v..".wav';";
+        cmd=cmd..scriptPath..s.."oggdec '"..v.."'.ogg -o '../../"..v..".wav';";
       else
         cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\oggdec' '"..v.."'.ogg -w '../../"..v..".wav';";
       end
