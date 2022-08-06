@@ -6,7 +6,7 @@ if os ~= "Win32" and os ~= "Win64" then
       prefix="/bin/bash -c ";
     end
   else
-    s = "/"
+    s = "\\"
     prefix="\"c:\\Program Files\\Git\\git-bash.exe\" -c ";
   end 
 basepath = reaper.GetProjectPath(0,"");
@@ -76,14 +76,14 @@ end
 function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script=bashScriptPath..s.."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+  script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
   run(script);
 end
 
 function pushAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script=bashScriptPath..s.."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
+  script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
   run(script);
 end
 
@@ -232,16 +232,16 @@ end
 function fixWindowsPath(path)
   return "/"..path:gsub(":",""):gsub("\\","/"); 
 end
- 
-function runSilentlyInPath(path, cmd)
+  
+function runSilentlyInPath(path, cmd) 
     --println("In runsiletly in path");
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
-    println(cmd);
+    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
+    --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -456,13 +456,13 @@ function encodeFilesInPart(person)
   basepath = reaper.GetProjectPath(0,"");
   firstfiles=getFilesInPart(person);
   existing=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
-  files=getNewFiles(firstfiles,existing);
+  files=getNewFiles(firstfiles,existing); 
   cmd="";
   for k,v in pairs(files) do
     if os=="OSX32" or os=="OSX64" then
       cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      else
-     cmd=cmd..bashScriptPath..s.."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+     cmd=cmd..bashScriptPath.."/".."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
      end
   end
   cmd=cmd.." echo hello";
