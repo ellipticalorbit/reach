@@ -15,7 +15,7 @@ bashScriptPath="/".. string.gsub(string.gsub( scriptPath,"\\","/" ),":","");
 ctime=0;
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
-  --files = scandir(basepath)
+  --files = scandir(basepath)ru
   files=getParts(basepath..s.."parts");
   for k,file in pairs(files) do
     if (file~=".git") then 
@@ -76,15 +76,32 @@ end
 function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
-  run(script);
+  if os=="OSX32" or os=="OSX64" then
+    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+    run(script);
+  elseif os=="Other" then
+    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+    run(script);
+  else
+    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+    run(script);
+  end
+  
 end
 
 function pushAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
-  run(script);
+  if os=="OSX32" or os=="OSX64" then
+    script="rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
+    run(script);
+  elseif os=="Other" then
+    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
+    run(script);
+  else
+    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
+    run(script);
+  end
 end
 
 function setupLocalRepo()
