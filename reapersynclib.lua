@@ -77,7 +77,7 @@ function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
   if os=="OSX32" or os=="OSX64" then
-    script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
+    script="rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
     run(script);
   elseif os=="Other" then
     script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
@@ -107,10 +107,10 @@ end
 function setupLocalRepo()
   result = isOnServer();
   if (result) then
-  --  println("Is on Server");
+    println("Is on Server");
     clone();
   else
-  --  println("Is not on Server");
+    println("Is not on Server");
     createRemoteRepo();
     clone();
   end
@@ -129,8 +129,9 @@ end
 function maybeSetupRepo()
    basepath = reaper.GetProjectPath(0,"");
    if exists(basepath,"parts") then
+	println("Parts exists");
    else
---      println("Setting up repo");
+      println("Setting up repo");
       setupLocalRepo();
    end
 end
@@ -165,7 +166,9 @@ function createRemoteRepo()
    basepath = reaper.GetProjectPath(0,"");
    name,server,username,root=getPrefs();
    song=getSongName();
-   io.popen('ssh '..username.."@"..server..' \"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\"');
+   basepath = reaper.GetProjectPath(0,"");
+   print("Setting up remote repo for "..song);
+   runInPath(basepath,'ssh '..username.."@"..server..' \\\"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\\\"');
 end
 
 function getParts(basepath)
@@ -233,7 +236,11 @@ function runInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
+    cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+ 
+    --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
     println(cmd);
+
     return reaper.ExecProcess(cmd,0);
 end
 
@@ -255,9 +262,9 @@ function runSilentlyInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    --local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
-    local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
+    --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
     --println(cmd);
     return reaper.ExecProcess(cmd,0);
 end
@@ -454,12 +461,14 @@ function getFilesInTrack(track, files)
         source=reaper.GetMediaItemTake_Source(take);
         val=reaper.GetMediaSourceFileName(source,"");
         --smaller=val:gsub(".*"..s,""):gsub(".wav","");
-        smaller="/"..val:gsub(".wav",""):gsub(":",""):gsub("\\","/");
-        files[smaller]=smaller;
+        smaller="/"..val:gsub(".wav",""):gsub(".mp3",""):gsub(".ogg",""):gsub(":",""):gsub("\\","/");
+        original="/"..val:gsub(":",""):gsub("\\","/");
+        files[smaller]=original;
        end
     end
   end
-end
+
+  end
 
 function printArray(arr)
   print("\n");
@@ -470,25 +479,31 @@ function printArray(arr)
 end
 
 function encodeFilesInPart(person)
-  basepath = reaper.GetProjectPath(0,"");
-  firstfiles=getFilesInPart(person);
-  existing=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
-  files=getNewFiles(firstfiles,existing); 
-  cmd="";
+  print("ENcoding files in path");
+  local basepath = reaper.GetProjectPath(0,"");
+  local firstfiles=getFilesInPart(person);
+  local existing=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
+  --printArray(firstfiles);
+  --printArray(existing);
+  local files=getNewFiles(firstfiles,existing);
+  printArray(files);
+  local cmd="";
   for k,v in pairs(files) do
     if os=="OSX32" or os=="OSX64" then
-      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."' -o 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      else
-     cmd=cmd..bashScriptPath.."/".."oggenc '"..v.."'.wav -o 'ogg/"..person..s..v:gsub(".*/","")..".ogg';";
+     cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      end
+      --runInPath(basepath, cmd);
   end
   cmd=cmd.." echo hello";
-  --print(cmd);
+  print(cmd);
   --print(cmd);
   if (cmd~="") then 
-      run(cmd);
+      print("Running command in path: "..basepath..s.."ogg"..s..person);
+      runInPath(basepath, cmd);
   end
-end
+ end
 
 function runInMacTerminal(cmd)
   println("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\"echo hello;read\\\"\"");
@@ -522,11 +537,14 @@ function decodeFilesInPart(person)
   
 end
 
-function getFilesInFolder(basepath,extension)
+function getFilesInFolder(oggpath,extension)
   index=0;
   files={};
+  println("Getting files in folder "..oggpath);
+  local cmd = "mkdir -p '"..oggpath.."'";
+  runInPath(basepath, cmd);
   while true do  --iterate and store files in project folder
-      local file=reaper.EnumerateFiles(basepath, index)
+      local file=reaper.EnumerateFiles(oggpath, index)
       if file then
           if (string.match(file,extension.."$")) then
             folderfile=file:gsub("."..extension,"");
@@ -551,10 +569,11 @@ end
 function getNewFiles(total, old)
   output={};
   for k,v in pairs(total) do
-    --print(k):
+    print("key:"..k)
+    print("value:"..v)
     local check=k:gsub(".*/","");
     if old[check]==nil then
-      output[k]=k;
+      output[k]=v;
     end
   end
   return output;
@@ -1175,4 +1194,4 @@ end
 --      track = reaper.GetTrack(0,trackNum);
 --      print(trackNum.." - "..reaper.GetTrackGUID(track).."\n");
 --  end
---decodeFilesInPart("Chiraag");
+encodeFilesInPart("pravesh");
