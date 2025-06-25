@@ -524,6 +524,10 @@ function encodeFilesInPart(person)
   end
  end
 
+local function getExtension(fullPath)
+    return fullPath:match("^.+%.([^%.]+)$")
+end
+
 function runInMacTerminal(cmd)
   -- os.execute("/opt/X11/bin/xeyes");
   os.execute(cmd);
@@ -558,17 +562,18 @@ function decodeFilesInPart(person)
   printArray(files);
 
   local toDecode = getNewFiles(needed, existing);
-  print("*** To Decode")
+  print("\n*** To Decode\n")
   printArray(toDecode);
   local forDecoding = getMatchingFiles(toDecode,firstfiles);
-  print("*** For Decoding")
+  print("\n*** For Decoding\n")
   printArray(forDecoding);
 
 
   cmd="";
   for k,v in pairs(forDecoding) do
+      local extension = getExtension(v);
       if osName=="OSX32" or osName=="OSX64" then
-        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..v.."';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
       elseif osName=="Other" then
         cmd=cmd..scriptPath..s.."oggdec '"..k.."'.ogg -o '../../"..v.."';";
       else
