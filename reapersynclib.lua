@@ -1,12 +1,16 @@
-os = reaper.GetOS(); 
-if os ~= "Win32" and os ~= "Win64" then
+osName = reaper.GetOS();
+
+if osName ~= "Win32" and osName ~= "Win64" then
     s = "/"
+    osShortName="linux"
     prefix="xterm -e ";
-    if os=="OSX32" or os=="OSX64" then
-      prefix="/bin/bash -c ";
+    if osName=="OSX32" or osName=="OSX64" or osName=="macOS-arm64" then
+      prefix="xterm -e ";
+      osShortName="mac"
     end
   else
     s = "\\"
+    osShortName="windows"
     prefix="\"c:\\Program Files\\Git\\git-bash.exe\" -c ";
   end 
 basepath = reaper.GetProjectPath(0,"");
@@ -17,6 +21,7 @@ function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
   --files = scandir(basepath)ru
   files=getParts(basepath..s.."parts");
+  printArray(files);
   for k,file in pairs(files) do
     if (file~=".git") then 
       decodeFilesInPart(file);
@@ -66,20 +71,22 @@ function readProperties()
       end
       println(basepath..s.."parts"..s..file..s.."properties");
   end
+  print(owner);
   if (owner~=nil) then
+
     local properties=table.load(basepath..s.."parts"..s..owner..s.."properties");
+    print(properties["tempo"]);
     reaper.SetCurrentBPM(0,properties["tempo"],false);
-    print(properties["tempo"]); 
   end
 end
 
 function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  if os=="OSX32" or os=="OSX64" then
+  if osName=="OSX32" or osName=="OSX64" then
     script="rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
     run(script);
-  elseif os=="Other" then
+  elseif osName=="Other" then
     script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
     run(script);
   else
@@ -92,10 +99,10 @@ end
 function pushAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  if os=="OSX32" or os=="OSX64" then
+  if osName=="OSX32" or osName=="OSX64" then
     script="rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
     run(script);
-  elseif os=="Other" then
+  elseif osName=="Other" then
     script=bashScriptPath.."/".."rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
     run(script);
   else
@@ -140,7 +147,11 @@ function clone()
   basepath = reaper.GetProjectPath(0,"");
   song = getSongName();
   name,server,username,root=getPrefs();
-  run("git clone ssh://"..username.."@"..server..":"..root.."/"..song.."/parts ");
+  local cmd='ssh '..username.."@"..server..' git config --global --add safe.directory '..root..'/'..song..'/parts';
+  runInPath(basepath, cmd);
+  runInPath(basepath, "git clone ssh://"..username.."@"..server..":"..root.."/"..song.."/parts;cd parts; git checkout master || git checkout -b master");
+--  runInPath(basepath, "git checkout $(git show-ref --verify --quiet refs/heads/master || echo '-b') master");
+  println("Cloned repo");
 end
 
 function isOnServer()
@@ -168,7 +179,7 @@ function createRemoteRepo()
    song=getSongName();
    basepath = reaper.GetProjectPath(0,"");
    print("Setting up remote repo for "..song);
-   runInPath(basepath,'ssh '..username.."@"..server..' \\\"cd '..root..';git init --shared --bare \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\';\\\"');
+   runInPath(basepath,'ssh '..username.."@"..server..' \"git config --global init.defaultBranch master;cd '..root..';git init --shared --bare -b master \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\'\"');
 end
 
 function getParts(basepath)
@@ -236,12 +247,19 @@ function runInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
-    cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    
  
     --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
-    println(cmd);
+--    println(cmd);
 
-    return reaper.ExecProcess(cmd,0);
+    if (osShortName=="mac") then
+      cmd = "set +x;cd '"..path.."' ; "..cmd..""
+      runInMacTerminal(cmd);
+      return 0;
+    else
+      cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+      return reaper.ExecProcess(cmd,0);
+    end
 end
 
 function runWithOutput(path, cmd)
@@ -258,15 +276,16 @@ function fixWindowsPath(path)
 end
   
 function runSilentlyInPath(path, cmd) 
+  return runInPath(path, cmd);
     --println("In runsiletly in path");
-    if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
-        path="/"..path:gsub(":",""):gsub("\\","/")
-    end
-    local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+    -- if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
+    --    path="/"..path:gsub(":",""):gsub("\\","/")
+    -- end
+    -- local cmd = prefix.."\"set -x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
  
     --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
     --println(cmd);
-    return reaper.ExecProcess(cmd,0);
+    --return reaper.ExecProcess(cmd,0);
 end
 
 function push()
@@ -404,16 +423,16 @@ function writePart(person)
   for index=min,max do
     rtrack =reaper.GetTrack(0,index);
     result=GetTrackChunk(rtrack);
---    println(projectPath);
---    println(result);
---    println("->");
+   println(projectPath);
+    --println(result);
+    println("->");
     output="";
     for str in magiclines(result) do
       str=str:gsub("FILE \".*"..s,"FILE \"");
       output=output.."\n"..str;
     end
     result=output;
---    println("Done");
+   println("Done");
     file = io.open(projectPath..s.."parts"..s..person..s..(reaper.GetTrackGUID(rtrack))..".trk","w");
     io.output(file);
     parent = reaper.GetParentTrack(rtrack);
@@ -423,11 +442,11 @@ function writePart(person)
     else
       pname="None";
     end
-    --print(name .."'s -> parent is "..pname.."\n");
+    print(name .."'s -> parent is "..pname.."\n");
     --print(parent)
     if (parent~=nil) then
       io.write(reaper.GetTrackGUID(parent).."\n");
-      --println(reaper.GetTrackGUID(rtrack).."'s  previous is"..prevguid);
+      println(reaper.GetTrackGUID(rtrack).."'s  previous is"..prevguid);
       io.write(prevguid.."\n");
     else
       io.write("-1\n");
@@ -489,7 +508,7 @@ function encodeFilesInPart(person)
   printArray(files);
   local cmd="";
   for k,v in pairs(files) do
-    if os=="OSX32" or os=="OSX64" then
+    if osName=="OSX32" or osName=="OSX64" then
       cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."' -o 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      else
      cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
@@ -506,25 +525,54 @@ function encodeFilesInPart(person)
  end
 
 function runInMacTerminal(cmd)
-  println("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\"echo hello;read\\\"\"");
-  reaper.ExecProcess("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\"echo hello;read\\\"\"",0);
+  -- os.execute("/opt/X11/bin/xeyes");
+  os.execute(cmd);
+  println("Running in mac terminal: "..cmd);
+  --runInMacTerminalNoisy(cmd);
+  -- os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd..";exit\\\"\"");
+end
+
+function runInMacTerminalNoisy(cmd)
+  -- os.execute("/opt/X11/bin/xeyes");
+  os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd..";exit\\\"\"");
 end
 
 function decodeFilesInPart(person)
 --  print("thing");
   basepath = reaper.GetProjectPath(0,"");
+  local needed=getFilesInAllTracks();
+  print("*** file needed")
+  printArray(needed);
+  print("***")
+
+
+
   firstfiles=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
   existing=getFilesInFolder(basepath,"wav");
   files=getNewFiles(firstfiles,existing);
---  printArray(firstfiles);printArray(existing);printArray(files);
+  print("*** Oggs")
+  printArray(firstfiles);
+  print("*** Existing")
+  printArray(existing);
+  print("*** Deltas")
+  printArray(files);
+
+  local toDecode = getNewFiles(needed, existing);
+  print("*** To Decode")
+  printArray(toDecode);
+  local forDecoding = getMatchingFiles(toDecode,firstfiles);
+  print("*** For Decoding")
+  printArray(forDecoding);
+
+
   cmd="";
-  for k,v in pairs(files) do
-      if os=="OSX32" or os=="OSX64" then
-        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..v.."'.ogg -o '../../"..v..".wav';";
-      elseif os=="Other" then
-        cmd=cmd..scriptPath..s.."oggdec '"..v.."'.ogg -o '../../"..v..".wav';";
+  for k,v in pairs(forDecoding) do
+      if osName=="OSX32" or osName=="OSX64" then
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..v.."';";
+      elseif osName=="Other" then
+        cmd=cmd..scriptPath..s.."oggdec '"..k.."'.ogg -o '../../"..v.."';";
       else
-        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\oggdec' '"..v.."'.ogg -w '../../"..v..".wav';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\oggdec' '"..k.."'.ogg -w '../../"..v.."';";
       end
   end
 --  cmd=cmd.." echo hello";
@@ -558,6 +606,40 @@ function getFilesInFolder(oggpath,extension)
   return files;
 end
 
+function getFilesInAllTracks()
+    local filesMap = {}
+    local basePath = reaper.GetProjectPath("")
+    if basePath:sub(-1) ~= "/" and basePath:sub(-1) ~= "\\" then
+        basePath = basePath .. "/"
+    end
+
+    local trackCount = reaper.CountTracks(0)
+    for i = 0, trackCount - 1 do
+        local track = reaper.GetTrack(0, i)
+        local itemCount = reaper.CountTrackMediaItems(track)
+        for j = 0, itemCount - 1 do
+            local item = reaper.GetTrackMediaItem(track, j)
+            local take = reaper.GetMediaItemTake(item, 0)
+            if take then
+                local source = reaper.GetMediaItemTake_Source(take)
+                local absFileName = reaper.GetMediaSourceFileName(source, "")
+                if absFileName ~= "" then
+                    local relativePath = absFileName
+                    if absFileName:find(basePath, 1, true) == 1 then
+                        relativePath = absFileName:sub(#basePath + 1)
+                    end
+                    -- Extract the file name (removing directories)
+                    local fileName = relativePath:match("([^/\\]+)$") or relativePath
+                    -- Remove extension: for example, "song.mp3" becomes "song"
+                    local baseName = fileName:match("(.+)%..+") or fileName
+                    filesMap[baseName] = relativePath
+                end
+            end
+        end
+    end
+    return filesMap
+end
+
 function getFilesInPart(person)
   files={};
   for k,track in pairs(getTracksInPart(person)) do
@@ -573,6 +655,21 @@ function getNewFiles(total, old)
     print("value:"..v)
     local check=k:gsub(".*/","");
     if old[check]==nil then
+      output[k]=v;
+    end
+  end
+  return output;
+end
+
+function getMatchingFiles(total, old)
+  output={};
+  for k,v in pairs(total) do
+    print("key:"..k)
+    print("value:"..v)
+    local check=k:gsub(".*/","");
+    print(check);
+    print(old[check]);
+    if old[check]~=nil then
       output[k]=v;
     end
   end
@@ -765,12 +862,12 @@ function refresh()
   ctime=checkTime(ctime, "Refresh Audio");
   writePart(user);
   ctime=checkTime(ctime, "Write Track Files");
+  readProperties(user);
+  ctime=checkTime(ctime, "Read Tempo");
   syncRepo(user);
   ctime=checkTime(ctime, "Sync Repo");
   pushAudio(user);
   ctime=checkTime(ctime, "Push Audio");
-  readProperties(user);
-  ctime=checkTime(ctime, "Read Tempo");
   refreshTracks();
   ctime=checkTime(ctime, "Load Tracks into Reaper");
   maybeCreateTrack(user);
@@ -798,10 +895,10 @@ function pull()
   ctime=checkTime(ctime, "Check Orphans");
   refreshAudio()
   ctime=checkTime(ctime, "Refresh Audio");
-  syncRepo(user);
-  ctime=checkTime(ctime, "Sync Repo");
   readProperties(user);
   ctime=checkTime(ctime, "Read Tempo");
+  syncRepo(user);
+  ctime=checkTime(ctime, "Sync Repo");
   refreshTracks();
   ctime=checkTime(ctime, "Load Tracks into Reaper");
   maybeCreateTrack(user);
@@ -1194,4 +1291,8 @@ end
 --      track = reaper.GetTrack(0,trackNum);
 --      print(trackNum.." - "..reaper.GetTrackGUID(track).."\n");
 --  end
-encodeFilesInPart("pravesh");
+--encodeFilesInPart("pravesh");
+--runInMacTerminal("ls");
+--createRemoteRepo()
+--io.popen("xterm -e 'ls -l;read stuff;exit");
+decodeFilesInPart("Pravesh")
