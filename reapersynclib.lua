@@ -593,11 +593,9 @@ function decodeFilesInPart(person)
   for k,v in pairs(forDecoding) do
       local extension = getExtension(v);
       if osName=="OSX32" or osName=="OSX64" then
-        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
-      elseif osName=="Other" then
-        cmd=cmd..scriptPath..s.."oggdec '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       else
-        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
+        cmd=cmd..scriptPath..s.."ffmpeg -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       end
   end
 --  cmd=cmd.." echo hello";
