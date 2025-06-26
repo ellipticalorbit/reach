@@ -17,6 +17,15 @@ basepath = reaper.GetProjectPath(0,"");
 scriptPath = reaper.GetResourcePath()..s.."scripts"..s.."reach";
 bashScriptPath="/".. string.gsub(string.gsub( scriptPath,"\\","/" ),":","");
 ctime=0;
+
+-- Add endsWith method to string library
+function string:endsWith(suffix)
+  if (suffix == nil or suffix=="") then
+    return false
+  end
+  return self:sub(-#suffix) == suffix
+end
+
 function refreshTracks()
   basepath = reaper.GetProjectPath(0,"");
   --files = scandir(basepath)ru
@@ -24,8 +33,9 @@ function refreshTracks()
   printArray(files);
   for k,file in pairs(files) do
     if (file~=".git") then 
-      refreshPart(file);
-      decodeFilesInPart(file);
+       refreshPart(file);
+       decodeFilesInPart(file);
+     
       --checkTime(ctime, "Done with "..file);
     end
   end
@@ -247,17 +257,27 @@ function runInPath(path, cmd)
     if (reaper.GetOS()== "Win32" or reaper.GetOS()=="Win64") then
         path="/"..path:gsub(":",""):gsub("\\","/")
     end
+
+    println("raw "..cmd)
     
- 
+  
     --local cmd=prefix.."\"cd '"..path.."' ; "..cmd.." \"";
---    println(cmd);
+    if (cmd:endsWith(";")) then
+      println("True")
+    else
+      println("False")
+      cmd = cmd..";"
+    end 
+    
+
 
     if (osShortName=="mac") then
       cmd = "set +x;cd '"..path.."' ; "..cmd..""
       runInMacTerminal(cmd);
       return 0;
     else
-      cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." ; echo Press Enter...;  read stuff\""
+      cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." echo Press Enter...;  read stuff\""
+      println(cmd);
       return reaper.ExecProcess(cmd,0);
     end
 end
@@ -573,17 +593,20 @@ function decodeFilesInPart(person)
   for k,v in pairs(forDecoding) do
       local extension = getExtension(v);
       if osName=="OSX32" or osName=="OSX64" then
-        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
+      elseif osName=="Other" then
+        cmd=cmd..scriptPath..s.."oggdec '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
       else
-        cmd=cmd..scriptPath..s.."ffmpeg -i '"..k.."'.ogg '../../"..v.."';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       end
   end
 --  cmd=cmd.." echo hello";
 --  cmd="/usr/local/bin/oggdec -Q test.ogg";
---  println(cmd);
+  println(cmd);
   if (cmd~="") then 
 --        runInMacTerminal("none");
-      runSilentlyInPath(basepath..s.."ogg"..s..person,cmd);
+ println("Running "..cmd);
+      runInPath(basepath..s.."ogg"..s..person,cmd);
   end
   
 end
@@ -1299,3 +1322,4 @@ end
 --createRemoteRepo()
 --io.popen("xterm -e 'ls -l;read stuff;exit");
 decodeFilesInPart("Pravesh")
+--refresh();
