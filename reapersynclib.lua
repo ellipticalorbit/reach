@@ -24,8 +24,8 @@ function refreshTracks()
   printArray(files);
   for k,file in pairs(files) do
     if (file~=".git") then 
-      decodeFilesInPart(file);
       refreshPart(file);
+      decodeFilesInPart(file);
       --checkTime(ctime, "Done with "..file);
     end
   end
@@ -509,7 +509,7 @@ function encodeFilesInPart(person)
   local cmd="";
   for k,v in pairs(files) do
     if osName=="OSX32" or osName=="OSX64" then
-      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggenc' -Q '"..v.."' -o 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
+      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      else
      cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      end
@@ -573,11 +573,9 @@ function decodeFilesInPart(person)
   for k,v in pairs(forDecoding) do
       local extension = getExtension(v);
       if osName=="OSX32" or osName=="OSX64" then
-        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/oggdec' -Q '"..k.."'.ogg -o '../../"..k.."."..extension.."';";
-      elseif osName=="Other" then
-        cmd=cmd..scriptPath..s.."oggdec '"..k.."'.ogg -o '../../"..v.."';";
+        cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       else
-        cmd=cmd.."'"..reaper.GetResourcePath().."\\Scripts\\reach\\oggdec' '"..k.."'.ogg -w '../../"..v.."';";
+        cmd=cmd..scriptPath..s.."ffmpeg -i '"..k.."'.ogg '../../"..v.."';";
       end
   end
 --  cmd=cmd.." echo hello";
