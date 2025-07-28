@@ -5,7 +5,7 @@ if osName ~= "Win32" and osName ~= "Win64" then
     osShortName="linux"
     prefix="xterm -e ";
     if osName=="OSX32" or osName=="OSX64" or osName=="macOS-arm64" then
-      prefix="xterm -e ";
+      prefix="zsh -c ";
       osShortName="mac"
     end
   else
@@ -896,6 +896,7 @@ function refresh()
   ctime=checkTime(ctime, "Load Tracks into Reaper");
   maybeCreateTrack(user);
   ctime=checkTime(ctime, "Create Track For Me");
+  reconnectOfflineMediaItems()
   reaper.Main_OnCommand(40047,0); -- rebuild peaks
   ctime=checkTime(ctime, "Rebuild Peaks");
   reaper.Main_OnCommand(40491,0); -- unarm all tracks
@@ -1310,6 +1311,99 @@ function importPart(name)
   
  -- addAllChildren(trackNum, root,tracks,parents,prevs);
 end
+
+function ensurePCMSourceLoaded(take)
+    local source = reaper.GetMediaItemTake_Source(take)
+    if source then
+        -- Force the source to load by retrieving its length.
+        local len = reaper.PCM_Source_GetLength(source)
+        if len > 0 then
+            return source
+        else
+            reaper.ShowConsoleMsg("PCM source did not load properly.\n")
+            return nil
+        end
+    else
+        reaper.ShowConsoleMsg("PCM source not available – check if the file is offline.\n")
+        return nil
+    end
+end
+
+local function getMediaPath(originalPath)
+    local dir, filename = originalPath:match("(.*/)([^/]+)$")
+    if dir and filename then
+        return dir .. "Media/" .. filename
+    end
+    return originalPath
+end
+
+function bringFileOnline(take)
+    -- Get the current file path, even if the PCM source is not loaded
+    local currentSource = reaper.GetMediaItemTake_Source(take)
+    local filePath = reaper.GetMediaSourceFileName(currentSource or 0, "")
+    
+    if filePath == "" then
+        reaper.ShowConsoleMsg("No file associated with this take.\n")
+        return false
+    end
+
+    if not reaper.file_exists(filePath) then
+        filePath = getMediaPath(filePath)
+        if not reaper.file_exists(filePath) then
+        reaper.ShowConsoleMsg("File does not exist: " .. filePath .. "\n")
+        return false
+        end
+    end
+
+    -- Reassign the source using the same file. This should force the PCM source to load.
+    local success = reaper.BR_SetTakeSourceFromFile(take, filePath, false)
+    if success then
+        reaper.ShowConsoleMsg("File brought online: " .. filePath .. "\n")
+    else
+        reaper.ShowConsoleMsg("Failed to bring file online for: " .. filePath .. "\n")
+    end
+
+    return success
+end
+
+function reconnectOfflineMediaItems() 
+    local reconnected = 0
+    local trackCount = reaper.CountTracks(0)
+    for i = 0, trackCount - 1 do
+        local track = reaper.GetTrack(0, i)
+        local itemCount = reaper.CountTrackMediaItems(track)
+        for j = 0, itemCount - 1 do
+            local item = reaper.GetTrackMediaItem(track, j)
+            local take = reaper.GetMediaItemTake(item, 0)
+            if take then
+                println("Take");
+                bringFileOnline(take) -- Attempt to bring the file online
+                --local source = ensurePCMSourceLoaded(take)
+                -- if (source == nil) then
+                --   println("Nil");
+                --     reaper.ShowConsoleMsg("No source for take in item " .. j .. " of track " .. i .. "\n")
+                    
+                -- else
+
+                -- --    local state = reaper.CF_GetMediaSourceOnline(source)
+                -- -- Check if source is offline (bit flag 1 is typically set when offline)
+
+                --     local filePath = reaper.GetMediaSourceFileName(source, "")
+                --     if filePath ~= "" and reaper.file_exists(filePath) then
+                --         -- Attempt to reconnect offline media by reassigning the source.
+                --         -- Note: BR_SetTakeSourceFromFile is provided by the SWS extension.
+                --         reaper.BR_SetTakeSourceFromFile(take, filePath, false)
+                --         local source2 = reaper.GetMediaItemTake_Source(take)
+                --         reaper.CF_SetMediaSourceOnline(source2, true)
+                --         reconnected = reconnected + 1
+                --     end
+
+                -- end
+            end
+        end
+    end
+    reaper.ShowConsoleMsg("Reconnected " .. reconnected .. " media item(s).\n")
+end
 --  max=reaper.GetNumTracks()-1
 --  for trackNum=0,reaper.GetNumTracks()-1 do
 --      track = reaper.GetTrack(0,trackNum);
@@ -1319,5 +1413,6 @@ end
 --runInMacTerminal("ls");
 --createRemoteRepo()
 --io.popen("xterm -e 'ls -l;read stuff;exit");
-decodeFilesInPart("Pravesh")
---refresh();
+--decodeFilesInPart("Pravesh")
+reconnectOfflineMediaItems()
+--refresh(); 
