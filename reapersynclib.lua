@@ -550,10 +550,10 @@ end
 
 function runInMacTerminal(cmd)
   -- os.execute("/opt/X11/bin/xeyes");
-  os.execute(cmd);
+  -- os.execute(cmd);
   println("Running in mac terminal: "..cmd);
   --runInMacTerminalNoisy(cmd);
-  -- os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd..";exit\\\"\"");
+  os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd.."exit\\\"\"");
 end
 
 function runInMacTerminalNoisy(cmd)
