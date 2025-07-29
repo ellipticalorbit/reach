@@ -455,6 +455,7 @@ function writePart(person)
    println("Done");
     file = io.open(projectPath..s.."parts"..s..person..s..(reaper.GetTrackGUID(rtrack))..".trk","w");
     io.output(file);
+    print("Wrote file "..projectPath..s.."parts"..s..person..s..(reaper.GetTrackGUID(rtrack))..".trk\n");
     parent = reaper.GetParentTrack(rtrack);
     retval,name=reaper.GetTrackName(rtrack);
     if (parent~=nil) then
@@ -550,10 +551,11 @@ end
 
 function runInMacTerminal(cmd)
   -- os.execute("/opt/X11/bin/xeyes");
-  -- os.execute(cmd);
+  os.execute(cmd);
   println("Running in mac terminal: "..cmd);
   --runInMacTerminalNoisy(cmd);
-  os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd.."exit\\\"\"");
+  --os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd.."exit\\\"\"");
+  
 end
 
 function runInMacTerminalNoisy(cmd)
@@ -1410,9 +1412,12 @@ end
 --      print(trackNum.." - "..reaper.GetTrackGUID(track).."\n");
 --  end
 --encodeFilesInPart("pravesh");
---runInMacTerminal("ls");
+runInMacTerminal("ls >~/test.txt");
+print("Importing Pravesh");
+--refreshFromFiles();
+--writePart("Pravesh");
 --createRemoteRepo()
 --io.popen("xterm -e 'ls -l;read stuff;exit");
 --decodeFilesInPart("Pravesh")
-reconnectOfflineMediaItems()
+--reconnectOfflineMediaItems()
 --refresh(); 
