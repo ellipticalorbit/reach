@@ -93,7 +93,7 @@ end
 function refreshAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  if osName=="OSX32" or osName=="OSX64" then
+  if osShortName=="mac" then
     script="rsync -ai -r --chmod=g+rwx -p --progress "..username.."@"..server..":"..root.."/"..song.."/ogg .";
     run(script);
   elseif osName=="Other" then
@@ -109,7 +109,7 @@ end
 function pushAudio(user)
   name,server,username,root=getPrefs();
   song=getSongName();
-  if osName=="OSX32" or osName=="OSX64" then
+  if osShortName=="mac" then
     script="rsync -ai -r --chmod=g+rwx -p --progress ./ogg/"..name.." "..username.."@"..server..":"..root.."/"..song.."/ogg";
     run(script);
   elseif osName=="Other" then
@@ -529,7 +529,7 @@ function encodeFilesInPart(person)
   printArray(files);
   local cmd="";
   for k,v in pairs(files) do
-    if osName=="OSX32" or osName=="OSX64" then
+    if osShortName=="mac" then
       cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      else
      cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
@@ -594,7 +594,7 @@ function decodeFilesInPart(person)
   cmd="";
   for k,v in pairs(forDecoding) do
       local extension = getExtension(v);
-      if osName=="OSX32" or osName=="OSX64" then
+      if osShortName=="mac" then
         cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       else
         cmd=cmd..scriptPath..s.."ffmpeg -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
