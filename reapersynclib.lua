@@ -276,7 +276,8 @@ function runInPath(path, cmd)
       runInMacTerminal(cmd);
       return 0;
     else
-      cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." echo Press Enter...;  read stuff\""
+      --cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." echo Press Enter...;  read stuff\""
+      cmd = prefix.."\"set +x;cd '"..path.."' ; "..cmd.." echo Press Enter...\""
       println(cmd);
       return reaper.ExecProcess(cmd,0);
     end
@@ -530,7 +531,7 @@ function encodeFilesInPart(person)
   local cmd="";
   for k,v in pairs(files) do
     if osShortName=="mac" then
-      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
+      cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..v.."' 'ogg/"..person.."/"..k:gsub(".*/","")..".ogg';";
      else
      cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..v.."' 'ogg/"..person..s..k:gsub(".*/","")..".ogg';";
      end
@@ -597,7 +598,7 @@ function decodeFilesInPart(person)
       if osShortName=="mac" then
         cmd=cmd.."'"..reaper.GetResourcePath().."/Scripts/reach/macos/ffmpeg' -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       else
-        cmd=cmd..scriptPath..s.."ffmpeg -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
+        cmd=cmd..bashScriptPath.."/".."ffmpeg -i '"..k.."'.ogg '../../"..k.."."..extension.."';";
       end
   end
 --  cmd=cmd.." echo hello";
