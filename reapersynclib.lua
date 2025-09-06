@@ -189,7 +189,7 @@ function createRemoteRepo()
    song=getSongName();
    basepath = reaper.GetProjectPath(0,"");
    print("Setting up remote repo for "..song);
-   runInPath(basepath,'ssh '..username.."@"..server..' \"git config --global init.defaultBranch master;cd '..root..';git init --shared --bare -b master \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\'\"');
+   runInPath(basepath,'ssh '..username.."@"..server..' \\\"git config --global init.defaultBranch master;cd '..root..';git init --shared --bare -b master \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\'\\\""');
 end
 
 function getParts(basepath)
@@ -568,16 +568,16 @@ function decodeFilesInPart(person)
 --  print("thing");
   basepath = reaper.GetProjectPath(0,"");
   local needed=getFilesInAllTracks();
-  print("*** file needed")
+  println("*** file needed")
   printArray(needed);
-  print("***")
+  println("***")
 
 
 
   firstfiles=getFilesInFolder(basepath..s.."ogg"..s..person,"ogg");
   existing=getFilesInFolder(basepath,"wav");
   files=getNewFiles(firstfiles,existing);
-  print("*** Oggs")
+  println("*** Oggs")
   printArray(firstfiles);
   print("*** Existing")
   printArray(existing);
@@ -585,10 +585,10 @@ function decodeFilesInPart(person)
   printArray(files);
 
   local toDecode = getNewFiles(needed, existing);
-  print("\n*** To Decode\n")
+  println("\n*** To Decode\n")
   printArray(toDecode);
   local forDecoding = getMatchingFiles(toDecode,firstfiles);
-  print("\n*** For Decoding\n")
+  println("\n*** For Decoding\n")
   printArray(forDecoding);
 
 
@@ -646,20 +646,24 @@ function getFilesInAllTracks()
         local itemCount = reaper.CountTrackMediaItems(track)
         for j = 0, itemCount - 1 do
             local item = reaper.GetTrackMediaItem(track, j)
-            local take = reaper.GetMediaItemTake(item, 0)
-            if take then
-                local source = reaper.GetMediaItemTake_Source(take)
-                local absFileName = reaper.GetMediaSourceFileName(source, "")
-                if absFileName ~= "" then
-                    local relativePath = absFileName
-                    if absFileName:find(basePath, 1, true) == 1 then
-                        relativePath = absFileName:sub(#basePath + 1)
+            -- iterate through all takes in the media item
+            local takeCount = reaper.CountTakes(item)
+            for t = 0, takeCount - 1 do
+                local take = reaper.GetMediaItemTake(item, t)
+                if take then
+                    local source = reaper.GetMediaItemTake_Source(take)
+                    local absFileName = reaper.GetMediaSourceFileName(source, "")
+                    if absFileName ~= "" then
+                        local relativePath = absFileName
+                        if absFileName:find(basePath, 1, true) == 1 then
+                            relativePath = absFileName:sub(#basePath + 1)
+                        end
+                        -- Extract the file name (removing directories)
+                        local fileName = relativePath:match("([^/\\]+)$") or relativePath
+                        -- Remove extension: for example, "song.mp3" becomes "song"
+                        local baseName = fileName:match("(.+)%..+") or fileName
+                        filesMap[baseName] = relativePath
                     end
-                    -- Extract the file name (removing directories)
-                    local fileName = relativePath:match("([^/\\]+)$") or relativePath
-                    -- Remove extension: for example, "song.mp3" becomes "song"
-                    local baseName = fileName:match("(.+)%..+") or fileName
-                    filesMap[baseName] = relativePath
                 end
             end
         end
@@ -1413,12 +1417,12 @@ end
 --      print(trackNum.." - "..reaper.GetTrackGUID(track).."\n");
 --  end
 --encodeFilesInPart("pravesh");
-runInMacTerminal("ls >~/test.txt");
-print("Importing Pravesh");
+-- runInMacTerminal("ls >~/test.txt");
+-- print("Importing Pravesh");
 --refreshFromFiles();
 --writePart("Pravesh");
 --createRemoteRepo()
 --io.popen("xterm -e 'ls -l;read stuff;exit");
---decodeFilesInPart("Pravesh")
+decodeFilesInPart("mags")
 --reconnectOfflineMediaItems()
---refresh(); 
+--refresh();
