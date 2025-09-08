@@ -544,7 +544,7 @@ function encodeFilesInPart(person)
       print("Running command in path: "..basepath..s.."ogg"..s..person);
       runInPath(basepath, cmd);
   end
- end
+end
 
 local function getExtension(fullPath)
     return fullPath:match("^.+%.([^%.]+)$")
@@ -854,7 +854,7 @@ end
 function selfUpdate()
   kb = reaper.GetResourcePath()
   path = kb..s.."Scripts"..s.."reach";
-  runSilentlyInPath(path,"git pull origin master");
+  runSilentlyInPath(path,"git pull --rebase origin master");
 end
 
 function trackclone()
