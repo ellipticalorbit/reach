@@ -135,7 +135,7 @@ end
 
 function syncRepo(user)
  -- println("Sync repo "..user);
-  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --no-edit origin master; git commit -m 'Still no message'";
+  script = "cd parts; git add . --all; git commit -m 'no message'; git pull --rebase --no-edit origin master; git commit -m 'Still no message'";
   run(script);
   writeProperties(user);
   script = "cd parts; git add . --all; git commit -m 'no message';  git push --set-upstream origin master";
