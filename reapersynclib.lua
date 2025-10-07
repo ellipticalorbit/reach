@@ -159,7 +159,7 @@ function clone()
   name,server,username,root=getPrefs();
   local cmd='ssh '..username.."@"..server..' git config --global --add safe.directory '..root..'/'..song..'/parts';
   runInPath(basepath, cmd);
-  runInPath(basepath, "git clone ssh://"..username.."@"..server..":"..root.."/"..song.."/parts;cd parts; git checkout master || git checkout -b master");
+  runInPath(basepath, "git clone ssh://"..username.."@"..server..":"..root.."/"..song.."/parts; cd parts; git checkout master || git checkout -b master");
 --  runInPath(basepath, "git checkout $(git show-ref --verify --quiet refs/heads/master || echo '-b') master");
   println("Cloned repo");
 end
@@ -189,7 +189,7 @@ function createRemoteRepo()
    song=getSongName();
    basepath = reaper.GetProjectPath(0,"");
    print("Setting up remote repo for "..song);
-   runInPath(basepath,'ssh '..username.."@"..server..' \\\"git config --global init.defaultBranch master;cd '..root..';git init --shared --bare -b master \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\'\\\""');
+   runInPath(basepath,'ssh '..username.."@"..server..' \\\"git config --global init.defaultBranch master;cd '..root..';git init --shared --bare -b master \''..song..'/parts\';mkdir -p \''..song..'/ogg\';chmod g+ws \''..song..'/ogg\'\\\"');
 end
 
 function getParts(basepath)
@@ -212,6 +212,8 @@ function getTrackFiles(basepath,person)
   files={};
   while true do  --iterate and store files in project folder
       local file=reaper.EnumerateFiles(basepath..s.."parts"..s..person, index)
+      print(basepath..s.."parts"..s..person)
+      print(file);
       if file then
         if file~="properties" then
           files[file]=file;
@@ -551,12 +553,12 @@ local function getExtension(fullPath)
 end
 
 function runInMacTerminal(cmd)
-  -- os.execute("/opt/X11/bin/xeyes");
-  os.execute(cmd);
   println("Running in mac terminal: "..cmd);
   --runInMacTerminalNoisy(cmd);
-  --os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd.."exit\\\"\"");
-  
+  --os.execute("/usr/bin/osascript -e \"tell app \\\"Terminal\\\" to do script \\\""..cmd.."read;exit\\\"\"");
+  os.execute("bash -c \""..cmd.."read;exit\"",0);
+  println("bash -c \""..cmd.."read;exit\"");
+
 end
 
 function runInMacTerminalNoisy(cmd)
@@ -763,9 +765,9 @@ function readPart(person)
   prevs = {};
   ctime=reaper.time_precise();
   files = getTrackFiles(projectPath,person);
-  --ctime=checkTime(ctime, "Done getting files");
+  ctime=checkTime(ctime, "Done getting files");
   for k,file in pairs(files) do
-    --ctime=checkTime(ctime,"Reading file "..file);
+    ctime=checkTime(ctime,"Reading file "..file);
     --print(file);
    -- print(file);
     parentguid="-1";
@@ -854,7 +856,7 @@ end
 function selfUpdate()
   kb = reaper.GetResourcePath()
   path = kb..s.."Scripts"..s.."reach";
-  runSilentlyInPath(path,"git pull --rebase origin master");
+  runSilentlyInPath(path,"git pull origin master");
 end
 
 function trackclone()
@@ -1295,6 +1297,7 @@ function importPart(name)
   
   local tracks,parents,prevs=readPart(name,0);
   
+  
   for k,track in pairs(trackser) do
     if (tracks[k]==nil) then
       reaper.DeleteTrack(getTrackByGUID(k));
@@ -1309,7 +1312,7 @@ function importPart(name)
   empty=reaper.GetTrack(0,trackNum);
   indent(trackNum+1,0); 
   for k,v in pairs(root) do
-    --print("Tracknum:"..trackNum);
+    print("Tracknum:"..trackNum);
     addTrack(k,trackNum,tracks[k],parents[k],true);
     addNext(k, parents);
  end
@@ -1423,6 +1426,6 @@ end
 --writePart("Pravesh");
 --createRemoteRepo()
 --io.popen("xterm -e 'ls -l;read stuff;exit");
-decodeFilesInPart("mags")
+createRemoteRepo();
 --reconnectOfflineMediaItems()
 --refresh();
