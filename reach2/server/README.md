@@ -43,7 +43,7 @@ Retention defaults to keep-everything-forever. To change it, set `REACH_RETENTIO
 | `GET/PATCH /me`, `GET/DELETE /tokens` | profile, device tokens |
 | `POST /projects`, `GET /projects[/{id}]`, `POST /join` | create (returns join code), list, join |
 | `GET/PATCH/DELETE /projects/{id}/members...`, `POST .../join-code/rotate` | membership |
-| `POST .../blobs/missing`, `PUT/GET .../blobs/{sha256}` | content-addressed OGG upload/download |
+| `POST .../blobs/missing`, `PUT/GET .../blobs/{sha256}` | content-addressed audio upload/download (Ogg Vorbis/Opus or WAV, detected from the bytes) |
 | `POST .../push` | per-track `{guid, base_rev, op, chunk, parent_guid, position}`; result per track: accepted / unchanged / conflict |
 | `GET .../changes?since=N` | head state of every track changed since seq N (incl. deletions) |
 | `GET .../tracks?state=live\|deleted\|all`, `.../tracks/{guid}/revisions[/{rev}]`, `POST .../tracks/{guid}/restore` | history and undelete |

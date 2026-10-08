@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .deps import current_user, get_db, project_access
-from .models import Blob, Member, Project, Track, TrackRevision, User, now
-from .validation import (SHA_RE, ChunkError, check_ogg, chunk_hash, normalise_guid, track_name,
+from .models import Blob, BlobVariant, Member, Project, Track, TrackRevision, User, now
+from .validation import (SHA_RE, ChunkError, chunk_hash, detect_media, normalise_guid, track_name,
                          validate_chunk)
 
 router = APIRouter()
@@ -57,7 +57,7 @@ async def put_blob(sha256: str, request: Request, m: Member = Depends(project_ac
     if declared:
         _check_quota(s, p, int(declared))
 
-    up, h, size, head = store.new_upload(), hashlib.sha256(), 0, b""
+    up, h, size, head, ext = store.new_upload(), hashlib.sha256(), 0, b"", "ogg"
     try:
         async for part in request.stream():
             size += len(part)
@@ -70,12 +70,12 @@ async def put_blob(sha256: str, request: Request, m: Member = Depends(project_ac
         if size == 0:
             raise HTTPException(422, "empty upload")
         try:
-            check_ogg(head)
+            ext = detect_media(head)
         except ChunkError as e:
             raise HTTPException(422, str(e))
         if h.hexdigest() != sha256:
             raise HTTPException(422, "sha256 mismatch")
-        up.commit(sha256)
+        up.commit(sha256, ext)
     except BaseException:
         up.abort()
         raise
@@ -85,7 +85,7 @@ async def put_blob(sha256: str, request: Request, m: Member = Depends(project_ac
         if db.get(Blob, (m.project_id, sha256)):
             return "exists"
         _check_quota(s, proj, size)
-        db.add(Blob(project_id=m.project_id, sha256=sha256, size=size))
+        db.add(Blob(project_id=m.project_id, sha256=sha256, size=size, ext=ext))
         proj.storage_bytes += size
         db.commit()
         return "stored"
@@ -96,12 +96,61 @@ async def put_blob(sha256: str, request: Request, m: Member = Depends(project_ac
 @router.get("/projects/{project_id}/blobs/{sha256}")
 def get_blob(sha256: str, request: Request, m: Member = Depends(project_access("viewer")),
              db: Session = Depends(get_db)):
-    if not SHA_RE.match(sha256) or db.get(Blob, (m.project_id, sha256)) is None:
+    blob = db.get(Blob, (m.project_id, sha256)) if SHA_RE.match(sha256) else None
+    if blob is None:
         raise HTTPException(404, "blob not found")
-    path = request.app.state.store.path(sha256)
+    path = request.app.state.store.path(sha256, blob.ext)
     if path is None or not path.exists():
         raise HTTPException(404, "blob data missing")
-    return FileResponse(path, media_type="audio/ogg")
+    return FileResponse(path, media_type="audio/wav" if blob.ext == "wav" else "audio/ogg")
+
+
+# ---- High-quality companions ---------------------------------------------------------------------
+# Chunks always reference the Ogg. An HQ client also uploads the lossless WAV and links it to that Ogg, so HQ
+# clients can fetch the WAV while LQ clients keep using the Ogg.
+
+class HqLink(BaseModel):
+    ogg: str
+    wav: str
+
+
+class HqLinks(BaseModel):
+    links: list[HqLink] = Field(max_length=500)
+
+
+@router.post("/projects/{project_id}/hq")
+def link_hq(body: HqLinks, m: Member = Depends(project_access("editor")), db: Session = Depends(get_db)):
+    shas = {x for l in body.links for x in (l.ogg, l.wav)}
+    if any(not SHA_RE.match(x) for x in shas):
+        raise HTTPException(422, "invalid sha256")
+    blobs = {b.sha256: b for b in db.scalars(select(Blob).where(Blob.project_id == m.project_id,
+                                                                Blob.sha256.in_(shas)))}
+    results = []
+    for l in body.links:
+        o, w = blobs.get(l.ogg), blobs.get(l.wav)
+        if o is None or o.ext != "ogg":
+            results.append({"ogg": l.ogg, "status": "unknown_ogg"})
+        elif w is None or w.ext != "wav":
+            results.append({"ogg": l.ogg, "status": "unknown_wav"})
+        else:
+            v = db.get(BlobVariant, (m.project_id, l.ogg))
+            if v is None:
+                db.add(BlobVariant(project_id=m.project_id, ogg_sha=l.ogg, wav_sha=l.wav))
+            else:
+                v.wav_sha = l.wav
+            results.append({"ogg": l.ogg, "status": "linked"})
+    db.commit()
+    return {"results": results}
+
+
+@router.post("/projects/{project_id}/hq/lookup")
+def lookup_hq(body: MissingBody, m: Member = Depends(project_access("viewer")), db: Session = Depends(get_db)):
+    """{hashes: [ogg sha, ...]} -> {variants: {ogg sha: wav sha}} for those that have a WAV companion."""
+    if any(not SHA_RE.match(h) for h in body.hashes):
+        raise HTTPException(422, "invalid sha256")
+    rows = db.scalars(select(BlobVariant).where(BlobVariant.project_id == m.project_id,
+                                                BlobVariant.ogg_sha.in_(body.hashes)))
+    return {"variants": {v.ogg_sha: v.wav_sha for v in rows}}
 
 
 # ---- Push / pull ---------------------------------------------------------------------
@@ -153,28 +202,30 @@ def push(body: PushBody, request: Request, m: Member = Depends(project_access("e
         try:
             guid = normalise_guid(tp.guid)
             parent = normalise_guid(tp.parent_guid) if tp.parent_guid else None
-            hashes = []
+            hashes, refs = [], []
             if tp.op == "upsert":
                 if tp.chunk is None:
                     raise ChunkError("upsert requires a chunk")
-                hashes = validate_chunk(tp.chunk, guid, s.max_chunk_bytes)
+                refs = validate_chunk(tp.chunk, guid, s.max_chunk_bytes)
+                hashes = sorted({sha for sha, _ in refs})
         except ChunkError as e:
             raise HTTPException(422, f"{tp.guid}: {e}")
         if guid in seen:
             raise HTTPException(422, f"duplicate track in push: {guid}")
         seen.add(guid)
-        items.append((tp, guid, parent, hashes))
+        items.append((tp, guid, parent, hashes, refs))
 
     p = _lock_project(db, m.project_id)
-    wanted = {h for *_, hashes in items for h in hashes}
+    wanted = {ref for *_, refs in items for ref in refs}  # (sha, ext)
     if wanted:
-        have = set(db.scalars(select(Blob.sha256).where(Blob.project_id == p.id, Blob.sha256.in_(wanted))))
+        have = {(b.sha256, b.ext) for b in db.scalars(select(Blob).where(
+            Blob.project_id == p.id, Blob.sha256.in_({sha for sha, _ in wanted})))}
         if wanted - have:
-            raise HTTPException(422, {"error": "missing_blobs", "missing": sorted(wanted - have)})
+            raise HTTPException(422, {"error": "missing_blobs", "missing": sorted({sha for sha, _ in wanted - have})})
 
     results = []
     track_count = None
-    for tp, guid, parent, hashes in items:
+    for tp, guid, parent, hashes, _refs in items:
         t = db.get(Track, (p.id, guid))
         if t is None:
             if tp.op == "delete":

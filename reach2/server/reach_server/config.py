@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     dev_login: bool = False
 
     # Limits (public-facing hardening)
-    max_blob_bytes: int = 500 * MiB
+    max_blob_bytes: int = 2 * GiB  # raw WAV recordings can be large
     max_chunk_bytes: int = 2 * MiB
     project_quota_bytes: int | None = 5 * GiB  # None = unlimited
     max_projects_per_user: int = 20

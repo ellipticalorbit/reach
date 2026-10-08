@@ -1,4 +1,5 @@
 -- Small filesystem helpers. Paths use "/" internally (REAPER and Windows both accept it).
+local platform = require("reach.platform")
 local fs = {}
 
 local function R() return rawget(_G, "reaper") end
@@ -6,7 +7,7 @@ local function R() return rawget(_G, "reaper") end
 function fs.norm(path) return (path:gsub("\\", "/")) end
 
 function fs.native(path)
-  if package.config:sub(1, 1) == "\\" then return (path:gsub("/", "\\")) end
+  if platform.is_windows() then return (path:gsub("/", "\\")) end
   return path
 end
 
@@ -53,7 +54,7 @@ function fs.mkdir(path)
   local r = R()
   if r and r.RecursiveCreateDirectory then
     r.RecursiveCreateDirectory(path, 0)
-  elseif package.config:sub(1, 1) == "\\" then
+  elseif platform.is_windows() then
     os.execute('mkdir "' .. fs.native(path) .. '" >NUL 2>&1')
   else
     os.execute("mkdir -p '" .. path:gsub("'", "'\\''") .. "'")

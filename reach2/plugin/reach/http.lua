@@ -1,6 +1,7 @@
 -- HTTP via curl (ships with macOS and Windows 10+). Requests run as background processes so REAPER
 -- stays responsive; request options go through a curl config file so secrets never hit a command line.
 local fs = require("reach.fs")
+local platform = require("reach.platform")
 local proc = require("reach.proc")
 local async = require("reach.async")
 local json = require("reach.json")
@@ -13,7 +14,7 @@ end
 
 local function curl_path()
   if http.curl then return http.curl end
-  return proc.is_windows and "curl.exe" or "curl"
+  return platform.is_windows() and "curl.exe" or "curl"
 end
 
 local counter = 0
@@ -39,7 +40,7 @@ function http.request(opts)
     c[#c + 1] = "data-binary = " .. cfg_quote("@" .. bodyf)
   elseif opts.upload_file then
     c[#c + 1] = "upload-file = " .. cfg_quote(opts.upload_file)
-    headers[#headers + 1] = "Content-Type: audio/ogg"
+    headers[#headers + 1] = "Content-Type: application/octet-stream"
   elseif opts.method and opts.method ~= "GET" then
     c[#c + 1] = "request = " .. cfg_quote(opts.method)
   end

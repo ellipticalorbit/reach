@@ -167,15 +167,28 @@ function Tracks:arrange(order)
   for _, tr in ipairs(selected) do if reaper.ValidatePtr(tr, "MediaTrack*") then reaper.SetTrackSelected(tr, true) end end
 end
 
--- Move the selected, not-yet-synced tracks (with their children) into the folder `folder_guid`.
-function Tracks:adopt_selected(folder_guid)
+-- Tracks that are not inside any Reach folder: { guid, name }
+function Tracks:orphans()
+  local synced = {}
+  for _, t in ipairs(self:snapshot()) do synced[t.guid] = true end
+  local out = {}
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    local g = reaper.GetTrackGUID(tr)
+    if not synced[g] then
+      local _, name = reaper.GetTrackName(tr)
+      out[#out + 1] = { guid = g, name = name }
+    end
+  end
+  return out
+end
+
+-- Move the not-yet-synced tracks in `wanted` (set of guids) plus their children into the folder
+-- `folder_guid`, after the folder's existing contents. Returns how many tracks were moved.
+function Tracks:adopt(folder_guid, wanted)
   local snap = self:snapshot()
   local synced = {}
   for _, t in ipairs(snap) do synced[t.guid] = true end
-  local selected = {}
-  for i = 0, reaper.CountSelectedTracks(0) - 1 do
-    selected[reaper.GetTrackGUID(reaper.GetSelectedTrack(0, i))] = true
-  end
   local adopt, adopting = {}, {}
   for i = 0, reaper.CountTracks(0) - 1 do
     local tr = reaper.GetTrack(0, i)
@@ -186,7 +199,7 @@ function Tracks:adopt_selected(folder_guid)
       if pg and adopting[pg] then
         adopting[g] = true
         adopt[#adopt + 1] = { guid = g, parent = pg }
-      elseif selected[g] then
+      elseif wanted[g] then
         adopting[g] = true
         adopt[#adopt + 1] = { guid = g, parent = folder_guid }
       end
@@ -207,6 +220,15 @@ function Tracks:adopt_selected(folder_guid)
   self:arrange(order)
   self:end_batch()
   return #adopt
+end
+
+-- Same, for the currently selected tracks.
+function Tracks:adopt_selected(folder_guid)
+  local wanted = {}
+  for i = 0, reaper.CountSelectedTracks(0) - 1 do
+    wanted[reaper.GetTrackGUID(reaper.GetSelectedTrack(0, i))] = true
+  end
+  return self:adopt(folder_guid, wanted)
 end
 
 function Tracks:begin_batch()

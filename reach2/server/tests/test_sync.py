@@ -1,4 +1,4 @@
-from conftest import make_chunk, new_guid, ogg_bytes, push, sha, upload, upsert
+from conftest import make_chunk, new_guid, ogg_bytes, push, sha, upload, upsert, wav_bytes
 
 
 def test_push_create_and_pull(alice, bob, joined):
@@ -222,3 +222,85 @@ def test_chunk_guid_forms(alice, joined):
     k = new_guid()
     assert push(alice, pid, upsert(k, '<TRACK\nNAME "z"\n>')).status_code == 422                # no guid anywhere
     assert push(alice, pid, upsert(k, f'<TRACK\nTRACKID {new_guid()}\n>')).status_code == 422    # wrong guid
+
+
+def ogg_chunk(guid, h, name="Raw"):
+    return (f'<TRACK\nNAME "{name}"\nTRACKID {guid}\n<ITEM\n<SOURCE VORBIS\nFILE "reach-media://{h}.ogg"\n>\n>\n>')
+
+
+def test_chunks_cannot_reference_wav_directly(alice, joined):
+    pid, g = joined["id"], new_guid()
+    h = upload(alice, pid, wav_bytes())
+    wav_ref = f'<TRACK\nTRACKID {g}\n<ITEM\n<SOURCE WAVE\nFILE "reach-media://{h}.wav"\n>\n>\n>'
+    assert push(alice, pid, upsert(g, wav_ref)).status_code == 422          # only Ogg refs are allowed
+    as_ogg = f'<TRACK\nTRACKID {g}\n<ITEM\n<SOURCE VORBIS\nFILE "reach-media://{h}.ogg"\n>\n>\n>'
+    r = push(alice, pid, upsert(g, as_ogg))                                  # blob is a wav -> not a valid ogg ref
+    assert r.status_code == 422 and r.json()["detail"]["missing"] == [h]
+
+
+def test_audio_type_detection(alice, joined):
+    pid = joined["id"]
+    for ok in (wav_bytes(), wav_bytes(riff=b"RF64")):
+        assert alice.put(f"/projects/{pid}/blobs/{sha(ok)}", content=ok).status_code == 200
+    riff_not_wave = b"RIFF\x24\x00\x00\x00AVI LIST" + b"\x00" * 40
+    for bad in (riff_not_wave, b"ID3\x03\x00\x00mp3 data here"):
+        assert alice.put(f"/projects/{pid}/blobs/{sha(bad)}", content=bad).status_code == 422
+
+
+def test_hq_companion_link_lookup_and_download(alice, bob, joined):
+    pid, g = joined["id"], new_guid()
+    ogg, wav = ogg_bytes(), wav_bytes(b"x" * 3000)
+    ho, hw = upload(alice, pid, ogg), upload(alice, pid, wav)
+    r = alice.post(f"/projects/{pid}/hq", json={"links": [{"ogg": ho, "wav": hw}]})
+    assert r.json()["results"] == [{"ogg": ho, "status": "linked"}]
+    assert push(alice, pid, upsert(g, ogg_chunk(g, ho))).status_code == 200
+    # a collaborator can ask which of the Oggs in a chunk have a WAV, then fetch it byte-for-byte
+    other = sha(b"nothing")
+    v = bob.post(f"/projects/{pid}/hq/lookup", json={"hashes": [ho, other]}).json()["variants"]
+    assert v == {ho: hw}
+    r = bob.get(f"/projects/{pid}/blobs/{hw}")
+    assert r.content == wav and r.headers["content-type"] == "audio/wav"
+    assert bob.get(f"/projects/{pid}/blobs/{ho}").content == ogg
+    # re-linking replaces the companion
+    hw2 = upload(alice, pid, wav_bytes(b"y" * 10))
+    alice.post(f"/projects/{pid}/hq", json={"links": [{"ogg": ho, "wav": hw2}]})
+    assert bob.post(f"/projects/{pid}/hq/lookup", json={"hashes": [ho]}).json()["variants"] == {ho: hw2}
+
+
+def test_hq_link_validation(alice, bob, joined):
+    pid = joined["id"]
+    ho, hw = upload(alice, pid, ogg_bytes()), upload(alice, pid, wav_bytes())
+    ghost = sha(b"ghost")
+    res = alice.post(f"/projects/{pid}/hq", json={"links": [
+        {"ogg": ghost, "wav": hw}, {"ogg": ho, "wav": ghost}, {"ogg": hw, "wav": hw}, {"ogg": ho, "wav": ho}]}).json()["results"]
+    assert [r["status"] for r in res] == ["unknown_ogg", "unknown_wav", "unknown_ogg", "unknown_wav"]
+    assert alice.post(f"/projects/{pid}/hq", json={"links": [{"ogg": "zz", "wav": hw}]}).status_code == 422
+    bob_id = bob.get("/me").json()["id"]
+    alice.patch(f"/projects/{pid}/members/{bob_id}", json={"role": "viewer"})
+    assert bob.post(f"/projects/{pid}/hq", json={"links": [{"ogg": ho, "wav": hw}]}).status_code == 403
+    assert bob.post(f"/projects/{pid}/hq/lookup", json={"hashes": [ho]}).status_code == 200
+
+
+def test_companions_live_and_die_with_their_ogg(alice, joined, sm, app):
+    from datetime import timedelta
+    from sqlalchemy import select, update
+    from reach_server.models import Blob, BlobVariant, now
+    from reach_server.retention import purge
+    import os, time
+    pid, g = joined["id"], new_guid()
+    used_ogg, used_wav = upload(alice, pid, ogg_bytes()), upload(alice, pid, wav_bytes())
+    lone_ogg, lone_wav = upload(alice, pid, ogg_bytes()), upload(alice, pid, wav_bytes())
+    alice.post(f"/projects/{pid}/hq", json={"links": [{"ogg": used_ogg, "wav": used_wav}, {"ogg": lone_ogg, "wav": lone_wav}]})
+    push(alice, pid, upsert(g, ogg_chunk(g, used_ogg)))            # only the first pair is referenced by a track
+    app.state.settings.retention_deleted_track_days = 1             # any policy, so GC runs
+    with sm() as db:
+        db.execute(update(Blob).values(created_at=now() - timedelta(hours=48)))
+        db.commit()
+    for _, f in app.state.store.list_files():
+        os.utime(f, (time.time() - 48 * 3600,) * 2)
+    r = purge(sm, app.state.store, app.state.settings, dry_run=False)
+    assert r.blob_rows_deleted == 2 and r.files_deleted == 2        # the unreferenced pair, nothing else
+    assert app.state.store.exists(used_ogg, "ogg") and app.state.store.exists(used_wav, "wav")
+    assert not app.state.store.exists(lone_ogg, "ogg") and not app.state.store.exists(lone_wav, "wav")
+    with sm() as db:
+        assert [v.ogg_sha for v in db.scalars(select(BlobVariant))] == [used_ogg]   # link rows cascaded away

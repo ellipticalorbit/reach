@@ -113,4 +113,19 @@ class Blob(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
     sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     size: Mapped[int] = mapped_column(BigInteger)
+    ext: Mapped[str] = mapped_column(String, default="ogg", server_default="ogg")  # detected type: ogg | wav
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BlobVariant(Base):
+    """High-quality companion: the lossless WAV (wav_sha) of the Ogg (ogg_sha) that chunks reference.
+    Both rows must exist in `blobs`; deleting either blob removes the link."""
+    __tablename__ = "blob_variants"
+    project_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    ogg_sha: Mapped[str] = mapped_column(String(64), primary_key=True)
+    wav_sha: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id", "ogg_sha"], ["blobs.project_id", "blobs.sha256"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["project_id", "wav_sha"], ["blobs.project_id", "blobs.sha256"], ondelete="CASCADE"),
+        Index("ix_blob_variants_wav", "project_id", "wav_sha"),
+    )

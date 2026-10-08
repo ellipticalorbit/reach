@@ -13,7 +13,7 @@ from sqlalchemy import and_, delete, exists, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import Settings
-from .models import Blob, Project, Track, TrackRevision, now
+from .models import Blob, BlobVariant, Project, Track, TrackRevision, now
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,12 @@ def _purge_project(db: Session, p: Project, settings: Settings, report: PurgeRep
     grace = now() - timedelta(hours=settings.blob_grace_hours)
     referenced = exists().where(TrackRevision.project_id == Blob.project_id,
                                 Blob.sha256 == func.any(TrackRevision.media_hashes))
-    orphans = db.scalars(select(Blob).where(Blob.project_id == p.id, Blob.created_at < grace, ~referenced)).all()
+    companion_of_referenced = exists().where(
+        BlobVariant.project_id == Blob.project_id, BlobVariant.wav_sha == Blob.sha256,
+        exists().where(TrackRevision.project_id == BlobVariant.project_id,
+                       BlobVariant.ogg_sha == func.any(TrackRevision.media_hashes)))
+    orphans = db.scalars(select(Blob).where(Blob.project_id == p.id, Blob.created_at < grace, ~referenced,
+                                            ~companion_of_referenced)).all()
     for blob in orphans:
         freed += blob.size
         report.blob_rows_deleted += 1
@@ -108,9 +113,8 @@ def purge(sm: sessionmaker, store, settings: Settings, dry_run: bool = True) -> 
     with sm() as db:
         known = set(db.scalars(select(Blob.sha256).distinct()))
     cutoff = time.time() - settings.blob_grace_hours * 3600
-    for sha in store.list_hashes():
-        path = store.path(sha)
-        if sha in known or path is None or path.stat().st_mtime > cutoff:
+    for sha, path in store.list_files():
+        if sha in known or path.stat().st_mtime > cutoff:
             continue
         report.files_deleted += 1
         if not dry_run:

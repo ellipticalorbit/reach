@@ -130,6 +130,10 @@ def ogg_bytes(extra: bytes = b"") -> bytes:
     return b"OggS" + b"\x00" * 22 + b"\x01\x1e\x01vorbis" + secrets.token_bytes(64) + extra
 
 
+def wav_bytes(extra: bytes = b"", riff: bytes = b"RIFF") -> bytes:
+    return riff + b"\x24\x00\x00\x00WAVEfmt " + secrets.token_bytes(32) + extra
+
+
 def sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 

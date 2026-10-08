@@ -27,6 +27,9 @@ local function world(name)
   local w
   w = new_world(ROOT .. "/" .. name, {
     browser = function(url) browser_approve(url, email) end,
+    mb_answer = function(msg, title, typ)
+      if title:find("not synced") then return w.orphan_answer or 7 end -- default: leave them out
+    end,
     input = function(title, caption, default)
       if title == "Share song" then return "Fake Song" end
       if title == "Join song" then return share_code end
@@ -99,30 +102,66 @@ local ok, err = xpcall(function()
   check(A.tracks[2].folderdepth == 0 and A.tracks[3].folderdepth == -1 and A.tracks[1].folderdepth == 1,
     "folder depths: open/close set correctly")
 
-  act(A, function() actions.sync(PLUGIN) end)
-  local out = table.concat(A.console, "")
-  check(out:find("3 pushed", 1, true) ~= nil, "alice sync pushed folder + 2 tracks: " .. (out:match("Sync complete[^\n]*") or out))
+  local first_sync = table.concat(A.console, ""):match("Sync complete[^\n]*")
+  check(first_sync and first_sync:find("1 pushed", 1, true), "share synced automatically (pushed alice's folder): " .. tostring(first_sync))
+  act(A, function() actions.sync_lq(PLUGIN) end)
+  local last_sync
+  for line in table.concat(A.console, ""):gmatch("Sync complete[^\n]*") do last_sync = line end
+  check(last_sync and last_sync:find("2 pushed", 1, true), "sync after adding tracks pushed Drums + Bass: " .. tostring(last_sync))
 
   act(B, function() actions.login(PLUGIN) end)
+  add_plain(B, "bob's old scratch track")
+  B.project_name = "" -- not saved: join must not need the current project to be saved
   act(B, function() actions.join(PLUGIN) end)
+  check(B.commands[1] == 40859 and B.commands[2] == 40022, "join opened a new project tab and the save-as dialog")
+  check(B.project_name ~= "", "new project was saved")
   check(outline(B) == "alice|  Drums|  Bass|bob", "bob joined and pulled the song: " .. outline(B))
+  check(not outline(B):find("scratch", 1, true), "bob's join happened in a fresh project")
   check(B.tracks[1].folderdepth == 1 and B.tracks[3].folderdepth == -1, "bob's folder depths correct")
   local dchunk = select(2, B.R.GetTrackStateChunk(B.tracks[2]))
   local path = dchunk:match('FILE "([^"]+)"')
   check(path and path:find("reach%-media/") and fs.exists(path), "bob's Drums points at downloaded ogg: " .. tostring(path))
   check(dchunk:find("<SOURCE VORBIS", 1, true) ~= nil, "bob's Drums source type is VORBIS")
 
-  act(A, function() actions.sync(PLUGIN) end)
+  act(A, function() actions.sync_lq(PLUGIN) end)
   check(table.concat(A.console, ""):find("1 pulled, 0 pushed", 1, true) ~= nil, "alice picks up bob's folder, nothing to push")
-  check(outline(A) == "alice|  Drums|  Bass|bob|Keys", "alice outline: " .. outline(A))
+  check(outline(A):find("alice|  Drums|  Bass|bob", 1, true) ~= nil, "alice outline: " .. outline(A))
+
+  -- orphans: alice still has "Keys" outside her folder; the prompt appeared during her syncs and she said "leave out"
+  local prompts = 0
+  for _, m in ipairs(A.mb) do if m.title:find("not synced") then prompts = prompts + 1 end end
+  check(outline(A):find("Keys", 1, true) ~= nil and A.tracks[#A.tracks].guid ~= nil, "orphan 'Keys' left outside the folder")
+  A.orphan_answer = 6
+  add_plain(A, "Loose")
+  act(A, function() actions.sync_lq(PLUGIN) end)
+  local sawprompt = false
+  for _, m in ipairs(A.mb) do if m.title:find("not synced") then sawprompt = m.msg end end
+  check(sawprompt and sawprompt:find("Loose", 1, true) and not sawprompt:find("Keys", 1, true),
+    "prompt lists only the new orphan (Keys was dismissed earlier)")
+  check(outline(A):find("alice|  Drums|  Bass|  Loose|", 1, true) ~= nil, "Loose adopted into alice's folder: " .. outline(A))
+  act(B, function() actions.sync_lq(PLUGIN) end)
+  check(outline(B):find("Loose", 1, true) ~= nil, "bob received the adopted track")
+  A.orphan_answer = nil
 
   -- bob edits a track, alice receives it
   local bass_b = B.tracks[3]
   B.R.GetSetMediaTrackInfo_String(bass_b, "P_NAME", "Bass v2", true) -- a UI rename leaves folder state alone
-  act(B, function() actions.sync(PLUGIN) end)
-  act(A, function() actions.sync(PLUGIN) end)
-  check(outline(A) == "alice|  Drums|  Bass v2|bob|Keys", "bob's rename reached alice: " .. outline(A))
-  check(#A.tracks == 5 and #B.tracks == 4, "no duplicate tracks created")
+  act(B, function() actions.sync_lq(PLUGIN) end)
+  act(A, function() actions.sync_lq(PLUGIN) end)
+  check(outline(A):find("alice|  Drums|  Bass v2|  Loose|bob", 1, true) ~= nil, "bob's rename reached alice: " .. outline(A))
+  check(#A.tracks == 6 and #B.tracks == 5, "no duplicate tracks created: " .. #A.tracks .. "/" .. #B.tracks)
+
+  -- the HQ action runs end to end through the real action code (alice's Drums is a lossless wav)
+  act(A, function() actions.sync_hq(PLUGIN) end)
+  local last_hq
+  for line in table.concat(A.console, ""):gmatch("High quality:[^\n]*") do last_hq = line end
+  check(last_hq and last_hq:find("1 uploaded", 1, true), "Sync HQ uploaded Drums' lossless original: " .. tostring(last_hq))
+  act(B, function() actions.sync_hq(PLUGIN) end)
+  local b_hq
+  for line in table.concat(B.console, ""):gmatch("High quality:[^\n]*") do b_hq = line end
+  check(b_hq and b_hq:find("1 downloaded", 1, true), "bob's Sync HQ downloaded it: " .. tostring(b_hq))
+  local dchunk2 = select(2, B.R.GetTrackStateChunk(B.tracks[2]))
+  check(dchunk2:find("%.hq%.wav") and dchunk2:find("<SOURCE WAVE", 1, true), "bob's Drums now plays the WAV")
 
   for _, w in ipairs({ A, B }) do
     for _, m in ipairs(w.mb) do if m.typ == 3 then check(false, "unexpected conflict dialog") end end

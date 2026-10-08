@@ -4,19 +4,19 @@ local fs = require("reach.fs")
 local async = require("reach.async")
 
 local proc = { tmp = nil }
-local is_win = package.config:sub(1, 1) == "\\"
-proc.is_windows = is_win
+local platform = require("reach.platform")
 local counter = 0
 math.randomseed(os.time())
 
 function proc.quote(s)
   s = tostring(s)
-  if is_win then return '"' .. s:gsub("%%", "%%%%") .. '"' end
+  if platform.is_windows() then return '"' .. s:gsub("%%", "%%%%") .. '"' end
   return "'" .. s:gsub("'", "'\\''") .. "'"
 end
 
 local function launch(script)
   local r = rawget(_G, "reaper")
+  local is_win = platform.is_windows()
   if r and r.ExecProcess then
     if is_win then r.ExecProcess('cmd.exe /c ""' .. script .. '""', -1)
     else r.ExecProcess('/bin/sh "' .. script .. '"', -1) end
@@ -26,6 +26,8 @@ local function launch(script)
     os.execute("/bin/sh '" .. script .. "' >/dev/null 2>&1 &")
   end
 end
+
+proc.launch = launch -- run a script file in the background (used for one-off helper scripts)
 
 local Job = {}
 Job.__index = Job
@@ -48,29 +50,33 @@ function Job:result()
   return res
 end
 
+-- Wrapper script text for running argv with stdout/stderr redirected and the exit code written LAST (so its
+-- appearance means "done"). Pure, so it can be tested for any platform. Returns text, extension.
+function proc.script_for(argv, files)
+  local parts = {}
+  for i, a in ipairs(argv) do parts[i] = proc.quote(a) end
+  local cmd = table.concat(parts, " ")
+  if platform.is_windows() then
+    local n = fs.native
+    return table.concat({ "@echo off", "@chcp 65001 >NUL", -- UTF-8 so non-ASCII paths survive
+      cmd .. ' > "' .. n(files.out) .. '" 2> "' .. n(files.err) .. '"',
+      'echo %errorlevel% > "' .. n(files.rc) .. '"', "" }, "\r\n"), "bat"
+  end
+  return table.concat({
+    cmd .. " > " .. proc.quote(files.out) .. " 2> " .. proc.quote(files.err),
+    "echo $? > " .. proc.quote(files.rc .. ".tmp"),
+    "mv " .. proc.quote(files.rc .. ".tmp") .. " " .. proc.quote(files.rc), "" }, "\n"), "sh"
+end
+
 -- Start argv (a list) in the background. Returns a Job.
 function proc.start(argv)
   assert(proc.tmp, "proc.tmp not configured")
   fs.mkdir(proc.tmp)
   counter = counter + 1
   local base = string.format("%s/p%d_%d_%d", proc.tmp, os.time(), math.random(1000000), counter)
-  local job = setmetatable({ script = base .. (is_win and ".bat" or ".sh"), out = base .. ".out",
-                             err = base .. ".err", rc = base .. ".rc" }, Job)
-  local parts = {}
-  for i, a in ipairs(argv) do parts[i] = proc.quote(a) end
-  local cmd = table.concat(parts, " ")
-  local body
-  if is_win then
-    local n = fs.native
-    body = table.concat({ "@echo off",
-      cmd .. ' > "' .. n(job.out) .. '" 2> "' .. n(job.err) .. '"',
-      'echo %errorlevel% > "' .. n(job.rc) .. '"', "" }, "\r\n")
-  else
-    body = table.concat({
-      cmd .. " > " .. proc.quote(job.out) .. " 2> " .. proc.quote(job.err),
-      "echo $? > " .. proc.quote(job.rc .. ".tmp"),
-      "mv " .. proc.quote(job.rc .. ".tmp") .. " " .. proc.quote(job.rc), "" }, "\n")
-  end
+  local files = { out = base .. ".out", err = base .. ".err", rc = base .. ".rc" }
+  local body, ext = proc.script_for(argv, files)
+  local job = setmetatable({ script = base .. "." .. ext, out = files.out, err = files.err, rc = files.rc }, Job)
   assert(fs.write(job.script, body))
   launch(job.script)
   return job

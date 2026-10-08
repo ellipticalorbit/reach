@@ -69,3 +69,10 @@ def test_project_limit(alice, settings, app):
     assert alice.post("/projects", json={"name": "a"}).status_code == 201
     assert alice.post("/projects", json={"name": "b"}).status_code == 201
     assert alice.post("/projects", json={"name": "c"}).status_code == 403
+
+
+def test_list_shows_join_code_only_to_owner(alice, bob, joined):
+    mine = alice.get("/projects").json()
+    assert [p["join_code"] for p in mine] == [joined["join_code"]]
+    theirs = bob.get("/projects").json()
+    assert len(theirs) == 1 and theirs[0]["role"] == "editor" and "join_code" not in theirs[0]

@@ -34,6 +34,24 @@ function ui.reaper()
       "Reach: deleted tracks", 4) == 6
   end
 
+  -- Returns "adopt" | "ignore" | "later"
+  function u:confirm_orphans(names)
+    local list = table.concat(names, "\n  ", 1, math.min(#names, 15)) .. (#names > 15 and "\n  ..." or "")
+    local r = R.MB(#names .. " track(s) are not inside a Reach folder, so they are NOT being synced:\n\n  " .. list ..
+      "\n\nYES = move them into my folder (and sync them)\nNO = leave them out (don't ask again about these)" ..
+      "\nCANCEL = ask me again next time", "Reach: tracks not synced", 3)
+    if r == 6 then return "adopt" elseif r == 7 then return "ignore" else return "later" end
+  end
+
+  -- Opens a new project tab and asks where to save it. Returns true if it was saved.
+  function u:new_project(song_name)
+    R.MB("Joining \"" .. song_name .. "\".\n\nA new project will be created for it. Choose where to save it.",
+      "Reach: join song", 0)
+    R.Main_OnCommand(40859, 0) -- File: New project tab
+    R.Main_OnCommand(40022, 0) -- File: Save project as...
+    return R.GetProjectName(0, "") ~= ""
+  end
+
   function u:prompt(title, caption, default)
     local ok, v = R.GetUserInputs(title, 1, caption .. ",extrawidth=250", default or "")
     if ok then return v end
@@ -42,9 +60,7 @@ function ui.reaper()
 
   function u:open_url(url)
     if R.CF_ShellExecute then R.CF_ShellExecute(url) return end
-    local win = package.config:sub(1, 1) == "\\"
-    if win then R.ExecProcess('cmd.exe /c start "" "' .. url .. '"', -1)
-    else R.ExecProcess('/usr/bin/open "' .. url .. '"', -1) end
+    R.ExecProcess(require("reach.platform").open_command(url), -1)
   end
 
   function u:clipboard(text) if R.CF_SetClipboard then R.CF_SetClipboard(text) end end
@@ -72,6 +88,17 @@ function ui.headless(opts)
   end
   function u:open_url(url) if opts.open_url then opts.open_url(url) end end
   function u:clipboard() end
+  u.orphan_prompts = {}
+  function u:confirm_orphans(names)
+    self.orphan_prompts[#self.orphan_prompts + 1] = names
+    local v = opts.orphans or "later"
+    if type(v) == "function" then return v(names) end
+    return v
+  end
+  function u:new_project(name)
+    if opts.new_project then return opts.new_project(name) end
+    return true
+  end
   return u
 end
 

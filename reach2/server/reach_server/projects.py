@@ -51,7 +51,7 @@ def create_project(body: ProjectCreate, request: Request, user: User = Depends(c
 def list_projects(user: User = Depends(current_user), db: Session = Depends(get_db)):
     rows = db.execute(select(Project, Member.role).join(Member, Member.project_id == Project.id)
                       .where(Member.user_id == user.id).order_by(Project.created_at)).all()
-    return [project_json(p, role) for p, role in rows]
+    return [project_json(p, role, include_code=role == "owner") for p, role in rows]
 
 
 @router.get("/projects/{project_id}")

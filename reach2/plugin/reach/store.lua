@@ -63,6 +63,7 @@ function store.memory(dir)
   fs.mkdir(dir)
   local cfg, project = {}, nil
   local s = {}
+  function s.reset_project() project = nil s.notes = {} end -- as if a fresh project had been opened
   function s.cfg_get(k) return cfg[k] end
   function s.cfg_set(k, v) cfg[k] = v end
   function s.project_load() return project and json.decode(json.encode(project)) or nil end

@@ -108,7 +108,17 @@ local function new_world(root, opts)
   end
   function R.GetResourcePath() return root .. "/resource" end
   function R.GetProjectPath() return root .. "/project" end
-  function R.GetProjectName() return "song.rpp" end
+  function R.GetProjectName() return W.project_name end
+  W.project_name, W.commands = "song.rpp", {}
+  function R.Main_OnCommand(id)
+    W.commands[#W.commands + 1] = id
+    if id == 40859 then -- new project tab: empty, unsaved
+      W.tracks, W.proj_ext, W.notes, W.project_name = {}, {}, nil, ""
+    elseif id == 40022 then -- save as
+      W.project_name = (W.name or "new") .. "-song.rpp"
+    end
+  end
+  function R.GetTrackName(tr) return true, (tr.chunk and tr.chunk:match('NAME "([^"]*)"')) or tr.name or "" end
   function R.Main_SaveProject() end
   function R.GetOS() return "OSX64" end
   function R.RecursiveCreateDirectory(p) os.execute("mkdir -p '" .. p .. "'") return 1 end

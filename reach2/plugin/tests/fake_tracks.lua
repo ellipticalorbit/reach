@@ -20,6 +20,38 @@ function FT:snapshot()
   return out
 end
 
+function FT:orphans()
+  local out = {}
+  for _, r in ipairs(self.list) do
+    if not self:_root_synced(r) then out[#out + 1] = { guid = r.guid, name = r.chunk:match('NAME "([^"]*)"') or "?" } end
+  end
+  return out
+end
+
+-- Move wanted (set of guids) unsynced tracks + their children under the folder, after its contents.
+function FT:adopt(folder_guid, wanted)
+  local adopting, moved = {}, {}
+  for _, r in ipairs(self.list) do
+    if not self:_root_synced(r) and (wanted[r.guid] or (r.parent and adopting[r.parent])) then
+      if not (r.parent and adopting[r.parent]) then r.parent = folder_guid end
+      adopting[r.guid] = true
+      moved[#moved + 1] = r
+    end
+  end
+  if #moved == 0 then return 0 end
+  local is_moved = {}
+  for _, r in ipairs(moved) do is_moved[r.guid] = true end
+  local rest = {}
+  for _, r in ipairs(self.list) do if not is_moved[r.guid] then rest[#rest + 1] = r end end
+  local in_sub, last = {}, nil
+  for i, r in ipairs(rest) do
+    if r.guid == folder_guid or (r.parent and in_sub[r.parent]) then in_sub[r.guid] = true last = i end
+  end
+  for i, r in ipairs(moved) do table.insert(rest, (last or #rest) + i, r) end
+  self.list = rest
+  return #moved
+end
+
 function FT:ensure_folder(me)
   for _, r in ipairs(self.list) do
     if not r.parent and owner_mark(r.chunk) == me.id then return r.guid, false end

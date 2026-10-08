@@ -9,6 +9,7 @@ local canon = require("reach.canon")
 local keys = require("reach.keys")
 local sha256 = require("reach.sha256")
 local async = require("reach.async")
+local fs = require("reach.fs")
 
 local Engine = {}
 Engine.__index = Engine
@@ -104,6 +105,37 @@ function Engine:show_join_code()
   return p.join_code
 end
 
+-- Share the song and immediately sync (which offers to move existing tracks into the new folder).
+-- Returns join code, sync summary.
+function Engine:share_and_sync(name)
+  local code = self:share(name)
+  self.ui:log("Song shared. Join code: " .. code)
+  return code, self:sync()
+end
+
+-- Join a song in a brand-new project: validates the code first (so a typo doesn't create an empty
+-- project), lets the UI create + save the new project, links it, and syncs. Returns song, sync summary.
+function Engine:join_new(code)
+  self:ensure_login()
+  local p = self.api:join(code)
+  if not self.ui:new_project(p.name) then
+    fail("Join cancelled: the new project was not saved.")
+  end
+  self.store.project_save(new_state(self:server_url(), p))
+  self.ui:log("Joined \"" .. p.name .. "\"")
+  return p, self:sync()
+end
+
+-- All songs on the server that I belong to: { id, name, role, join_code (owners only), storage_bytes }.
+-- Flags the one this project is linked to.
+function Engine:list_songs()
+  self:ensure_login()
+  local songs = self.api:projects()
+  local st = self.store.project_load()
+  for _, song in ipairs(songs) do song.linked = st ~= nil and st.project_id == song.id end
+  return songs
+end
+
 function Engine:deleted_tracks()
   local st = self.store.project_load()
   return self.api:tracks(st.project_id, "deleted")
@@ -118,17 +150,120 @@ end
 -- Helpers
 ---------------------------------------------------------------------------------------------------
 
+-- Fingerprint form: cached media (Ogg or its WAV companion) collapses to the one canonical Ogg reference, and
+-- the source type is normalised, so a track looks identical whether it points at the Ogg or at the WAV.
 function Engine:canonical(chunk)
-  local mapped = canon.map_files(chunk, function(path) return self.media:ref_for_local(path) end)
+  local mapped = canon.map_files(chunk, function(path)
+    local ref = self.media:ref_for_local(path)
+    if ref then return ref, "VORBIS" end
+  end)
   return canon.strip_volatile(mapped)
 end
 
--- Server chunk -> chunk with local media paths.
+-- Server chunk -> chunk with local media paths. Uses the high-quality WAV where we have it, else the Ogg.
 function Engine:localize(chunk)
   return canon.map_files(chunk, function(path)
     local sha = path:match("^reach%-media://(%x+)%.ogg$")
-    if sha then return self.media:path_for(sha) end
+    if not sha then return nil end
+    local hq = self.media:hq_path(sha)
+    if fs.exists(hq) then return hq, "WAVE" end
+    return self.media:path_for(sha), "VORBIS"
   end)
+end
+
+-- HQ sync, local side: audio we already have as an Ogg may have a WAV companion on the server now. Fetch those
+-- and point the tracks at them (fingerprints are unaffected, see canonical()).
+function Engine:upgrade_local_media(pid, summary)
+  local snap = self.tracks:snapshot()
+  local order, seen = {}, {}
+  for _, t in ipairs(snap) do
+    for _, p in ipairs(canon.file_refs(t.chunk)) do
+      local sha = fs.basename(fs.norm(p)):match("^(%x+)%.ogg$")
+      if sha and #sha == 64 and not seen[sha] then seen[sha] = true order[#order + 1] = sha end
+    end
+  end
+  if #order == 0 then return end
+  local variants = self.api:hq_lookup(pid, order)
+  local jobs = {}
+  for sha, wav in pairs(variants) do
+    if not fs.exists(self.media:hq_path(sha)) then jobs[#jobs + 1] = function() return self.media:ensure_hq(sha, wav) end end
+  end
+  if #jobs > 0 then
+    self.ui:log("Downloading " .. #jobs .. " high-quality file(s)...")
+    async.parallel(jobs, 3)
+    summary.hq_downloaded = summary.hq_downloaded + #jobs
+  end
+  local items = {}
+  for _, t in ipairs(snap) do
+    local touched = false
+    local new = canon.map_files(t.chunk, function(path)
+      local sha = fs.basename(fs.norm(path)):match("^(%x+)%.ogg$")
+      if sha and #sha == 64 and fs.exists(self.media:hq_path(sha)) then
+        touched = true
+        return self.media:hq_path(sha), "WAVE"
+      end
+    end)
+    if touched then items[#items + 1] = { guid = t.guid, chunk = new } end
+  end
+  if #items > 0 then
+    self.tracks:begin_batch()
+    local ok, err = pcall(function() self.tracks:apply(items) end)
+    self.tracks:end_batch()
+    if not ok then error(err, 0) end
+  end
+end
+
+-- HQ sync, upload side: attach the lossless original (or a lossless WAV conversion) to the Oggs the server
+-- already has for my tracks. Only uses Oggs we cached when the track was pushed; re-encoding would produce a
+-- different Ogg that no track references.
+function Engine:upload_hq_companions(pid, summary)
+  local ui, api = self.ui, self.api
+  local source_of, order = {}, {}
+  for _, t in ipairs(self.tracks:snapshot()) do
+    for _, p in ipairs(canon.file_refs(t.chunk)) do
+      if not self.media:ref_for_local(p) and self.media.is_lossless(p) then
+        local ogg = self.media:cached_ogg(p)
+        if ogg and not source_of[ogg] then source_of[ogg] = p order[#order + 1] = ogg end
+      end
+    end
+  end
+  if #order == 0 then return end
+  local absent = {}
+  for _, h in ipairs(api:blobs_missing(pid, order)) do absent[h] = true end
+  local have = api:hq_lookup(pid, order)
+  local todo = {}
+  for _, ogg in ipairs(order) do
+    if not absent[ogg] and not have[ogg] then todo[#todo + 1] = ogg end
+  end
+  if #todo == 0 then return end
+
+  ui:log("Preparing " .. #todo .. " high-quality file(s)...")
+  local jobs = {}
+  for i, ogg in ipairs(todo) do
+    jobs[i] = function()
+      local wav, why = self.media:prepare_wav(source_of[ogg])
+      return { ogg = ogg, wav = wav, why = why, path = source_of[ogg] }
+    end
+  end
+  local links, wav_shas = {}, {}
+  for _, res in ipairs(async.parallel(jobs, 2)) do
+    if res.wav then
+      links[#links + 1] = { ogg = res.ogg, wav = res.wav }
+      wav_shas[#wav_shas + 1] = res.wav
+    else
+      summary.hq_failed[#summary.hq_failed + 1] = { name = fs.basename(res.path), reason = res.why }
+    end
+  end
+  local missing = api:blobs_missing(pid, wav_shas)
+  if #missing > 0 then
+    ui:log("Uploading " .. #missing .. " high-quality file(s)...")
+    local up = {}
+    for i, h in ipairs(missing) do up[i] = function() api:put_blob(pid, h, self.media:upload_path(h, "wav")) end end
+    async.parallel(up, 3)
+  end
+  for _, r in ipairs(api:hq_link(pid, links)) do
+    if r.status == "linked" then summary.hq_uploaded = summary.hq_uploaded + 1 end
+  end
 end
 
 local function pk(parent) return parent or "" end
@@ -215,7 +350,9 @@ end
 -- Sync
 ---------------------------------------------------------------------------------------------------
 
-function Engine:sync()
+-- opts.hq: also upload the lossless originals, and prefer them when downloading.
+function Engine:sync(opts)
+  local hq = opts and opts.hq or false
   local st = self.store.project_load()
   if not st or not st.project_id then
     fail("This project isn't linked to a Reach song. Use 'Reach: Share song' or 'Reach: Join song' first.")
@@ -224,7 +361,7 @@ function Engine:sync()
   local ui, api, tracks = self.ui, self.api, self.tracks
   local pid = st.project_id
   local summary = { pulled = 0, pushed = 0, removed_here = 0, deleted_remote = 0, conflicts = 0,
-                    skipped = {}, conflicted = {} }
+                    skipped = {}, conflicted = {}, hq_uploaded = 0, hq_downloaded = 0, hq_failed = {} }
 
   self:ensure_login()
   ui:log("Syncing with the server...")
@@ -304,15 +441,26 @@ function Engine:sync()
   local need, seen = {}, {}
   for _, a in ipairs(apply) do
     if a.r then
-      for _, h in ipairs(a.r.media_hashes or {}) do
-        if not seen[h] then seen[h] = true need[#need + 1] = h end
+      for _, ref in ipairs(canon.file_refs(a.r.chunk)) do
+        local sha = ref:match("^reach%-media://(%x+)%.ogg$")
+        if sha and not seen[sha] then seen[sha] = true need[#need + 1] = sha end
       end
     end
   end
   if #need > 0 then
+    -- HQ: take the WAV companion where there is one, the Ogg where there isn't. LQ: always the Ogg.
+    local variants = hq and api:hq_lookup(pid, need) or {}
     ui:log("Downloading " .. #need .. " audio file(s)...")
     local jobs = {}
-    for i, h in ipairs(need) do jobs[i] = function() return self.media:ensure_local(h) end end
+    for i, sha in ipairs(need) do
+      jobs[i] = function()
+        if variants[sha] then
+          summary.hq_downloaded = summary.hq_downloaded + 1
+          return self.media:ensure_hq(sha, variants[sha])
+        end
+        return self.media:ensure_local(sha)
+      end
+    end
     async.parallel(jobs, 3)
   end
 
@@ -353,7 +501,29 @@ function Engine:sync()
 
   -- Make sure I have a Reach folder. Done *after* pulling: if the server already has one of mine (e.g. I
   -- synced from another project), it has just been applied and we must not create a second.
-  tracks:ensure_folder(me)
+  local my_folder = tracks:ensure_folder(me)
+
+  -- Tracks outside every Reach folder are not synced: tell the user (once per track unless they say "later").
+  summary.adopted = 0
+  if tracks.orphans then
+    st.ignored = st.ignored or {}
+    local fresh, names = {}, {}
+    for _, o in ipairs(tracks:orphans()) do
+      if not st.ignored[o.guid] then fresh[#fresh + 1] = o names[#names + 1] = o.name end
+    end
+    if #fresh > 0 then
+      local choice = ui:confirm_orphans(names)
+      if choice == "adopt" then
+        local wanted = {}
+        for _, o in ipairs(fresh) do wanted[o.guid] = true end
+        summary.adopted = tracks:adopt(my_folder, wanted) or 0
+      elseif choice == "ignore" then
+        for _, o in ipairs(fresh) do st.ignored[o.guid] = true end
+      end
+    end
+  end
+
+  if hq then self:upgrade_local_media(pid, summary) end
 
   -- 4. Work out what to push ---------------------------------------------------------------------
   local ordered
@@ -404,6 +574,7 @@ function Engine:sync()
       summary.skipped[#summary.skipped + 1] = { name = l.name, reason = problem }
     else
       local upload = canon.map_files(l.chunk, function(path)
+        -- The server only ever sees the canonical Ogg reference (a pulled WAV companion maps back to its Ogg).
         local ref = self.media:ref_for_local(path)
         if ref then return ref, "VORBIS" end
         return "reach-media://" .. sha_of[path] .. ".ogg", "VORBIS"
@@ -415,7 +586,7 @@ function Engine:sync()
         summary.skipped[#summary.skipped + 1] = { name = l.name, reason = bad_chunk }
         goto next_track
       end
-      for _, ref in ipairs(canon.file_refs(upload)) do wanted[ref:match("(%x+)%.ogg$")] = true end
+      for _, ref in ipairs(canon.file_refs(upload)) do wanted[ref:match("^reach%-media://(%x+)%.ogg$")] = true end
       local b = st.base[l.guid]
       local it = { guid = l.guid, base_rev = b and b.rev or 0, op = "upsert", chunk = upload,
                    parent_guid = l.parent, position = l.key }
@@ -435,7 +606,7 @@ function Engine:sync()
     ui:log("Uploading " .. #missing .. " audio file(s)...")
     local jobs = {}
     for i, h in ipairs(missing) do
-      jobs[i] = function() api:put_blob(pid, h, self.media:path_for(h)) end
+      jobs[i] = function() api:put_blob(pid, h, self.media:upload_path(h, "ogg")) end
     end
     async.parallel(jobs, 3)
   end
@@ -468,6 +639,15 @@ function Engine:sync()
 
   st.seq = feed.seq
   self.store.project_save(st)
+
+  -- HQ: lossless companions go up after the tracks are safely pushed, so a failure here can't lose a push.
+  if hq then
+    local ok, err = pcall(function() self:upload_hq_companions(pid, summary) end)
+    if not ok then
+      summary.hq_error = type(err) == "table" and (err.msg or "unknown error") or tostring(err)
+      ui:log("High-quality upload problem: " .. summary.hq_error)
+    end
+  end
   self.store.save_project()
   return summary
 end

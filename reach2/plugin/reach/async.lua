@@ -12,7 +12,7 @@ end
 local function finish(task, r)
   task.done = true
   task.ok = r[1]
-  if r[1] then task.value = r[2] else task.err = r[2] end
+  if r[1] then task.value = r[2] task.values = r else task.err = r[2] end
   if task.on_done then task.on_done(task) end
 end
 
@@ -137,7 +137,7 @@ function async.run(fn, ...)
     local e = task.err
     error(type(e) == "table" and ((e.msg or "error") .. "\n" .. (e.trace or "")) or tostring(e), 0)
   end
-  return task.value
+  return table.unpack(task.values, 2, task.values.n)
 end
 
 return async

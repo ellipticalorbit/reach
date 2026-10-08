@@ -73,6 +73,7 @@ end
 function Api:me() return self:call("GET", "/me") end
 function Api:create_project(name) return self:call("POST", "/projects", { name = name }) end
 function Api:join(code) return self:call("POST", "/join", { code = code }) end
+function Api:projects() return self:call("GET", "/projects") end
 function Api:project(id) return self:call("GET", "/projects/" .. id) end
 function Api:changes(id, since) return self:call("GET", "/projects/" .. id .. "/changes?since=" .. (since or 0)) end
 function Api:tracks(id, state) return self:call("GET", "/projects/" .. id .. "/tracks?state=" .. (state or "live")) end
@@ -97,6 +98,18 @@ function Api:push(id, tracks)
     error({ msg = err_message(status, data, ""), code = status, data = data }, 0)
   end
   return data
+end
+
+-- {ogg sha, ...} -> { [ogg sha] = wav sha } for those that have a high-quality WAV companion.
+function Api:hq_lookup(id, hashes)
+  if #hashes == 0 then return {} end
+  return self:call("POST", "/projects/" .. id .. "/hq/lookup", { hashes = hashes }).variants
+end
+
+-- links: { { ogg = sha, wav = sha }, ... }
+function Api:hq_link(id, links)
+  if #links == 0 then return {} end
+  return self:call("POST", "/projects/" .. id .. "/hq", { links = links }).results
 end
 
 function Api:put_blob(id, sha, path)
