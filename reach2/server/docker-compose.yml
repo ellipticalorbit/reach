@@ -1,0 +1,33 @@
+# Local:      docker compose up --build            -> http://localhost:8000 (dev login enabled, no TLS)
+# Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reach
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reach}
+      POSTGRES_DB: reach
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "reach"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      REACH_DATABASE_URL: postgresql+psycopg://reach:${POSTGRES_PASSWORD:-reach}@db:5432/reach
+      REACH_BLOB_DIR: /data/blobs
+      REACH_PUBLIC_URL: ${REACH_PUBLIC_URL:-http://localhost:8000}
+      REACH_SESSION_SECRET: ${REACH_SESSION_SECRET:-dev-insecure-change-me}
+      REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-true}
+      REACH_GOOGLE_CLIENT_ID: ${REACH_GOOGLE_CLIENT_ID:-}
+      REACH_GOOGLE_CLIENT_SECRET: ${REACH_GOOGLE_CLIENT_SECRET:-}
+    volumes: [blobs:/data/blobs]
+    ports: ["8000:8000"]
+
+volumes:
+  pgdata:
+  blobs:

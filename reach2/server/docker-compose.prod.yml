@@ -1,0 +1,23 @@
+# Production overlay: Caddy terminates TLS (automatic Let's Encrypt); the API is not published.
+# Set in .env: REACH_DOMAIN, REACH_PUBLIC_URL=https://<domain>, REACH_SESSION_SECRET, POSTGRES_PASSWORD,
+# REACH_GOOGLE_CLIENT_ID, REACH_GOOGLE_CLIENT_SECRET, and REACH_DEV_LOGIN=false.
+services:
+  api:
+    ports: !reset []
+    environment:
+      REACH_DEV_LOGIN: "false"
+    restart: unless-stopped
+  db:
+    restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["80:80", "443:443"]
+    environment:
+      REACH_DOMAIN: ${REACH_DOMAIN:?set REACH_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:

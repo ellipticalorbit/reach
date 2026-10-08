@@ -1,0 +1,26 @@
+[project]
+name = "reach-server"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "sqlalchemy>=2",
+  "psycopg[binary]",
+  "pydantic-settings",
+  "itsdangerous",
+  "httpx",
+  "google-auth",
+  "requests",
+  "python-multipart",
+  "alembic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["reach_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

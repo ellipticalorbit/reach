@@ -1,0 +1,6 @@
+{$REACH_DOMAIN} {
+	request_body {
+		max_size 600MB
+	}
+	reverse_proxy api:8000
+}
