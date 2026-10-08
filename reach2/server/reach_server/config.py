@@ -6,12 +6,15 @@ DEFAULT_SECRET = "dev-insecure-change-me"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="REACH_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="REACH_", env_file=".env", extra="ignore", env_ignore_empty=True)
 
     database_url: str = "postgresql+psycopg://reach:reach@localhost:5432/reach"
     blob_dir: str = "./data/blobs"
     public_url: str = "http://localhost:8000"
     session_secret: str = DEFAULT_SECRET
+    # Secure flag on the login cookie. None = automatic (on when public_url is https). Browsers drop Secure
+    # cookies over plain http, so set this to false only if you serve over http (testing).
+    cookie_secure: bool | None = None
 
     # Google sign-in. Leave unset to disable (use dev_login locally).
     google_client_id: str | None = None

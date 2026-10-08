@@ -24,6 +24,7 @@ services:
       REACH_PUBLIC_URL: ${REACH_PUBLIC_URL:-http://localhost:8000}
       REACH_SESSION_SECRET: ${REACH_SESSION_SECRET:-dev-insecure-change-me}
       REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-false}
+      REACH_COOKIE_SECURE: ${REACH_COOKIE_SECURE:-}
       REACH_GOOGLE_CLIENT_ID: ${REACH_GOOGLE_CLIENT_ID:-}
       REACH_GOOGLE_CLIENT_SECRET: ${REACH_GOOGLE_CLIENT_SECRET:-}
     volumes: [blobs:/data/blobs]

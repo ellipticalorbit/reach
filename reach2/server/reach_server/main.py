@@ -39,7 +39,8 @@ def create_app(settings: Settings | None = None, google=None, store=None) -> Fas
     app.state.google = google
 
     app.add_middleware(SessionMiddleware, secret_key=s.session_secret, same_site="lax",
-                       https_only=s.public_url.startswith("https"), max_age=3600)
+                       https_only=(s.public_url.startswith("https") if s.cookie_secure is None else s.cookie_secure),
+                       max_age=3600)
     app.include_router(auth_routes.router)
     app.include_router(projects.router)
     app.include_router(sync.router)

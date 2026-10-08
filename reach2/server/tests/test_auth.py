@@ -94,3 +94,32 @@ def test_open_redirect_blocked(client, google):
 
 def test_update_display_name(alice):
     assert alice.patch("/me", json={"display_name": "Ali"}).json()["display_name"] == "Ali"
+
+
+def _cookie_flags(engine, tmp_path, **kw):
+    from reach_server.config import Settings
+    from reach_server.main import create_app
+    from fastapi.testclient import TestClient
+    from conftest import DB_URL
+    s = Settings(database_url=DB_URL, blob_dir=str(tmp_path / "b"), session_secret="s", dev_login=True,
+                 rate_limit_enabled=False, auto_create_tables=False, **kw)
+    c = TestClient(create_app(s))
+    r = c.get("/auth/dev-login?email=a@example.com", follow_redirects=False)
+    return r.headers["set-cookie"].lower()
+
+
+def test_cookie_secure_flag(engine, tmp_path, app):
+    assert "secure" in _cookie_flags(engine, tmp_path, public_url="https://x.example")
+    assert "secure" not in _cookie_flags(engine, tmp_path, public_url="http://x.example:8000")
+    assert "secure" not in _cookie_flags(engine, tmp_path, public_url="https://x.example", cookie_secure=False)
+    assert "secure" in _cookie_flags(engine, tmp_path, public_url="http://x.example", cookie_secure=True)
+
+
+def test_empty_env_vars_count_as_unset(monkeypatch):
+    from reach_server.config import Settings
+    monkeypatch.setenv("REACH_COOKIE_SECURE", "")      # what docker compose passes for an unset variable
+    monkeypatch.setenv("REACH_GOOGLE_CLIENT_ID", "")
+    s = Settings()
+    assert s.cookie_secure is None and s.google_client_id is None
+    monkeypatch.setenv("REACH_COOKIE_SECURE", "false")
+    assert Settings().cookie_secure is False

@@ -1,10 +1,10 @@
 # Production overlay: Caddy terminates TLS (automatic Let's Encrypt); the API is not published.
 # Set in .env: REACH_DOMAIN, REACH_PUBLIC_URL=https://<domain>, REACH_SESSION_SECRET, POSTGRES_PASSWORD,
-# REACH_GOOGLE_CLIENT_ID, REACH_GOOGLE_CLIENT_SECRET, and REACH_DEV_LOGIN=false.
+# REACH_GOOGLE_CLIENT_ID, REACH_GOOGLE_CLIENT_SECRET, and (optionally) REACH_DEV_LOGIN=true.
 services:
   api:
     environment:
-      REACH_DEV_LOGIN: "false"
+      REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-false}   # leave off on a public server unless you accept the risk
     restart: unless-stopped
   db:
     restart: unless-stopped
