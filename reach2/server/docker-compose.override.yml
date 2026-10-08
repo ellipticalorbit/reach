@@ -1,0 +1,7 @@
+# Loaded automatically by a plain `docker compose up` (local development only).
+# Production uses `-f docker-compose.yml -f docker-compose.prod.yml`, which does not load this file.
+services:
+  api:
+    ports: ["8000:8000"]
+    environment:
+      REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-true}

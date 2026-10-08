@@ -5,7 +5,7 @@ FastAPI + Postgres. Audio blobs live on the filesystem (`REACH_BLOB_DIR`) behind
 
 ## Run locally
 ```
-docker compose up --build        # http://localhost:8000  (API docs at /docs)
+docker compose up --build        # http://localhost:8000  (API docs at /docs); needs Docker Compose v2
 ```
 Local mode enables `REACH_DEV_LOGIN`, so on the device-approval page you can use "Dev login" instead of Google.
 Never enable it on a public server.
@@ -47,3 +47,9 @@ Retention defaults to keep-everything-forever. To change it, set `REACH_RETENTIO
 | `POST .../push` | per-track `{guid, base_rev, op, chunk, parent_guid, position}`; result per track: accepted / unchanged / conflict |
 | `GET .../changes?since=N` | head state of every track changed since seq N (incl. deletions) |
 | `GET .../tracks?state=live\|deleted\|all`, `.../tracks/{guid}/revisions[/{rev}]`, `POST .../tracks/{guid}/restore` | history and undelete |
+
+## Troubleshooting
+* `KeyError: 'ContainerConfig'` from `/usr/bin/docker-compose`: that is the old Python Compose 1.29 (note the
+  hyphen) failing against a newer Docker. Install Compose v2 (`apt install docker-compose-plugin` from Docker's
+  apt repo) and use `docker compose` (with a space). Quick workaround on v1: `docker-compose down` (never
+  `-v`, that deletes the database) and then `up -d --build` again.

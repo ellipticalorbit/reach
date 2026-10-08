@@ -39,9 +39,12 @@ end
 -- Device-style login: opens the browser for Google sign-in, then waits for approval.
 function Engine:login()
   local d = self.api:device_start(self.device_label)
-  self.ui:log("Opening browser to sign in. If it doesn't open, go to " .. d.verification_url ..
-              " and enter code " .. d.user_code)
-  self.ui:open_url(d.verification_url_complete)
+  -- Build the URL from the server we are actually talking to; don't trust the host the server reports
+  -- (a misconfigured server would send us to localhost).
+  local base = self.api:base()
+  self.ui:log("Opening browser to sign in. If it doesn't open, go to " .. base .. "/device and enter code " ..
+              d.user_code)
+  self.ui:open_url(base .. "/device?user_code=" .. d.user_code)
   local deadline = async.clock() + d.expires_in
   while async.clock() < deadline do
     async.sleep(d.interval or 3)

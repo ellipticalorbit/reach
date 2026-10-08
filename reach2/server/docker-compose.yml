@@ -1,5 +1,6 @@
-# Local:      docker compose up --build            -> http://localhost:8000 (dev login enabled, no TLS)
+# Local:      docker compose up --build   (also loads docker-compose.override.yml: port 8000, dev login)
 # Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#             (naming the files explicitly skips the override, so nothing is published except Caddy)
 services:
   db:
     image: postgres:16-alpine
@@ -22,11 +23,10 @@ services:
       REACH_BLOB_DIR: /data/blobs
       REACH_PUBLIC_URL: ${REACH_PUBLIC_URL:-http://localhost:8000}
       REACH_SESSION_SECRET: ${REACH_SESSION_SECRET:-dev-insecure-change-me}
-      REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-true}
+      REACH_DEV_LOGIN: ${REACH_DEV_LOGIN:-false}
       REACH_GOOGLE_CLIENT_ID: ${REACH_GOOGLE_CLIENT_ID:-}
       REACH_GOOGLE_CLIENT_SECRET: ${REACH_GOOGLE_CLIENT_SECRET:-}
     volumes: [blobs:/data/blobs]
-    ports: ["8000:8000"]
 
 volumes:
   pgdata:

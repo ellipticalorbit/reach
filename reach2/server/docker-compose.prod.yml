@@ -3,7 +3,6 @@
 # REACH_GOOGLE_CLIENT_ID, REACH_GOOGLE_CLIENT_SECRET, and REACH_DEV_LOGIN=false.
 services:
   api:
-    ports: !reset []
     environment:
       REACH_DEV_LOGIN: "false"
     restart: unless-stopped

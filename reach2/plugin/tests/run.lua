@@ -133,6 +133,29 @@ end
 -------------------------------------------------------------------------------------------------
 local alice, bob, pid, join_code, a_folder, a_guitar, a_vocals, wav
 
+test("api.normalise_url adds a scheme and trims slashes", function()
+  eq(api_mod.normalise_url("quake.example.com"), "https://quake.example.com")
+  eq(api_mod.normalise_url(" https://quake.example.com/ "), "https://quake.example.com")
+  eq(api_mod.normalise_url("localhost:8000"), "http://localhost:8000")
+  eq(api_mod.normalise_url("192.168.1.5:8000/"), "http://192.168.1.5:8000")
+end)
+
+test("login opens the browser at *our* server, not the host the server reports", function()
+  local opened
+  local stub = { base = function() return "https://quake.example.com" end,
+                 device_start = function() return { device_code = "d", user_code = "ABCD-1234", expires_in = 30,
+                   interval = 0, verification_url = "http://localhost:8000/device",
+                   verification_url_complete = "http://localhost:8000/device?user_code=ABCD-1234" } end,
+                 device_poll = function() return "tok" end,
+                 me = function() return { display_name = "x", email = "x@y" } end }
+  local st = store_mod.memory(ROOT .. "/stub")
+  local ui = ui_mod.headless({ open_url = function(u) opened = u end })
+  local e = engine_mod.new({ api = stub, store = st, ui = ui, tracks = {}, media = {}, new_guid = FT.guid })
+  async.run(function() e:login() end)
+  eq(opened, "https://quake.example.com/device?user_code=ABCD-1234")
+  eq(st.cfg_get("token@https://quake.example.com"), "tok")
+end)
+
 test("login (device flow via dev-login) + whoami", function()
   alice = machine("alice")
   alice:run(function() alice.eng:login() end)

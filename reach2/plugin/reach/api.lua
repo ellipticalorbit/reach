@@ -14,9 +14,20 @@ function api.new(opts) -- opts: base_url, token (string or function returning on
 end
 
 -- base_url may be a string or a function (so settings changes apply immediately)
+-- "quake.example.com" -> "https://quake.example.com" (http for localhost / plain IPs); strips trailing slashes.
+function api.normalise_url(u)
+  u = (u or ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("/+$", "")
+  if u ~= "" and not u:match("^%a[%w+.-]*://") then
+    local host = u:match("^[^/:]+")
+    local local_host = host == "localhost" or host:match("^127%.") or host:match("^%d+%.%d+%.%d+%.%d+$")
+    u = (local_host and "http://" or "https://") .. u
+  end
+  return u
+end
+
 function Api:base()
   local u = type(self.base_url) == "function" and self.base_url() or self.base_url or ""
-  return (u:gsub("/+$", ""))
+  return api.normalise_url(u)
 end
 
 local function err_message(status, data, raw)

@@ -156,7 +156,7 @@ function actions.settings(dir)
   run(dir, "Settings", function(engine, ui, store)
     local cur = store.cfg_get("server_url") or DEFAULT_SERVER
     local url = ui:prompt("Reach settings", "Server URL", cur)
-    if url and url ~= "" then store.cfg_set("server_url", (url:gsub("/+$", ""))) end
+    if url and url ~= "" then store.cfg_set("server_url", require("reach.api").normalise_url(url)) end
     local q = ui:prompt("Reach settings", "Audio quality (Ogg q, -1..10; 1 = small)", store.cfg_get("ogg_quality") or "1")
     if q and tonumber(q) then store.cfg_set("ogg_quality", q) end
   end)
