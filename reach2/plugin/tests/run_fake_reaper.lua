@@ -42,10 +42,12 @@ local function world(name)
   return w
 end
 
+require("reach.progressui").delay = 0   -- show immediately in the test (quick syncs would otherwise never open it)
 local PLUGIN = "./"
 local actions = require("reach.actions")
 local function act(w, fn)
   _G.reaper = w.R
+  _G.gfx = w.gfx
   w.mb = {}
   fn()
   w.pump()
@@ -162,6 +164,21 @@ local ok, err = xpcall(function()
   check(b_hq and b_hq:find("1 downloaded", 1, true), "bob's Sync HQ downloaded it: " .. tostring(b_hq))
   local dchunk2 = select(2, B.R.GetTrackStateChunk(B.tracks[2]))
   check(dchunk2:find("%.hq%.wav") and dchunk2:find("<SOURCE WAVE", 1, true), "bob's Drums now plays the WAV")
+
+  -- a cancelled operation is reported calmly, not as a failure
+  A.mb = {}
+  _G.reaper, _G.gfx = A.R, A.gfx
+  actions._run(PLUGIN, "Sync", function() error({ cancelled = true, user = true, msg = "Cancelled." }, 0) end)
+  A.pump()
+  check(#A.mb == 1 and A.mb[1].msg:find("cancelled", 1, true) and not A.mb[1].title:find("failed", 1, true),
+    "cancel shows a calm message: " .. tostring(A.mb[1] and A.mb[1].title))
+
+  -- the progress window was opened and closed, and drew real text
+  check(A.gfx_log.inits >= 1 and A.gfx_log.quits >= 1, "progress window opened and closed (alice): " .. A.gfx_log.inits .. "/" .. A.gfx_log.quits)
+  check(B.gfx_log.inits >= 1 and B.gfx_log.quits >= 1, "progress window opened and closed (bob)")
+  local drew = table.concat(B.gfx_log.strings, "|")
+  check(drew:find("Downloading audio", 1, true) ~= nil or drew:find("Saving tracks", 1, true) ~= nil,
+    "progress window showed phase labels: " .. drew:sub(1, 120))
 
   for _, w in ipairs({ A, B }) do
     for _, m in ipairs(w.mb) do if m.typ == 3 then check(false, "unexpected conflict dialog") end end

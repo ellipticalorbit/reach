@@ -42,6 +42,15 @@ def blobs_missing(body: MissingBody, m: Member = Depends(project_access("editor"
     return {"missing": [h for h in dict.fromkeys(body.hashes) if h not in have]}
 
 
+@router.post("/projects/{project_id}/blobs/info")
+def blobs_info(body: MissingBody, m: Member = Depends(project_access("viewer")), db: Session = Depends(get_db)):
+    """{hashes: [...]} -> {sizes: {sha: bytes}} for those the project has (lets clients show download progress)."""
+    if any(not SHA_RE.match(h) for h in body.hashes):
+        raise HTTPException(422, "invalid sha256")
+    rows = db.scalars(select(Blob).where(Blob.project_id == m.project_id, Blob.sha256.in_(body.hashes)))
+    return {"sizes": {b.sha256: b.size for b in rows}}
+
+
 @router.put("/projects/{project_id}/blobs/{sha256}")
 async def put_blob(sha256: str, request: Request, m: Member = Depends(project_access("editor")),
                    db: Session = Depends(get_db)):

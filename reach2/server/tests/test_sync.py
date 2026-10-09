@@ -304,3 +304,12 @@ def test_companions_live_and_die_with_their_ogg(alice, joined, sm, app):
     assert not app.state.store.exists(lone_ogg, "ogg") and not app.state.store.exists(lone_wav, "wav")
     with sm() as db:
         assert [v.ogg_sha for v in db.scalars(select(BlobVariant))] == [used_ogg]   # link rows cascaded away
+
+
+def test_blob_sizes(alice, bob, joined):
+    pid = joined["id"]
+    data, w = ogg_bytes(b"z" * 500), wav_bytes(b"w" * 900)
+    ho, hw = upload(alice, pid, data), upload(alice, pid, w)
+    r = bob.post(f"/projects/{pid}/blobs/info", json={"hashes": [ho, hw, sha(b"nope")]}).json()
+    assert r == {"sizes": {ho: len(data), hw: len(w)}}
+    assert bob.post(f"/projects/{pid}/blobs/info", json={"hashes": ["zz"]}).status_code == 422

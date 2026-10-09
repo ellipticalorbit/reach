@@ -15,6 +15,7 @@ local media_mod = require("reach.media")
 local engine_mod = require("reach.engine")
 local ui_mod = require("reach.ui")
 local FT = require("tests.fake_tracks")
+local cancel = require("reach.cancel")
 local platform = require("reach.platform")
 local function write_wav_early(path)
   local rate, parts = 8000, {}
@@ -363,6 +364,92 @@ test("media:hash_file: native hashing of a big file matches the Lua implementati
   local expected = sha256.new()
   for _ = 1, 80 do expected:update(chunk) end
   eq(native, expected:hex())
+end)
+
+local progress_mod = require("reach.progress")
+local http = require("reach.http")
+
+test("http.parse_progress reads the last percentage from curl's progress bar", function()
+  eq(http.parse_progress("\r#####   12.5%\r##########  25.0%"), 0.25)
+  eq(http.parse_progress("######################################################################## 100.0%"), 1)
+  eq(http.parse_progress(""), nil); eq(http.parse_progress("curl: (28) timed out"), nil)
+end)
+
+-- Run fn with a controllable clock, always restoring the real one (a failed assertion must not freeze time).
+local function with_fake_clock(fn)
+  local now = { t = 0 }
+  local saved = async.clock
+  async.clock = function() return now.t end
+  local ok, err = pcall(fn, now)
+  async.clock = saved
+  if not ok then error(err, 0) end
+end
+
+test("progress tracker: parallel transfers aggregate into one bar with speed and ETA", function()
+  with_fake_clock(function(clock)
+    clock.t = 100
+    local seen = {}
+    local ui = { progress = function(_, snap) seen[#seen + 1] = snap end, progress_end = function() seen.ended = true end }
+    local t = progress_mod.new(ui)
+    t:phase("Uploading audio", { total_bytes = 300 * 1024 * 1024, items = 2 })
+    local a, b = t:job(100 * 1024 * 1024), t:job(200 * 1024 * 1024)
+    clock.t = 101; a.update(0.5); b.update(0.25)             -- 50 MB + 50 MB = 100 MB
+    clock.t = 102; a.update(1); b.update(0.5); a.finish()    -- 100 MB + 100 MB = 200 MB after 2 s
+    local snap = t:snapshot()
+    truthy(math.abs(snap.fraction - 200 / 300) < 1e-9, "fraction " .. snap.fraction)
+    truthy(snap.detail:find("200.0 MB of 300.0 MB", 1, true), snap.detail)
+    truthy(snap.detail:find("100.0 MB/s", 1, true), "speed: " .. snap.detail)
+    truthy(snap.detail:find("1s left", 1, true), "ETA: " .. snap.detail)
+    truthy(snap.detail:find("file 2 of 2", 1, true), snap.detail)
+    clock.t = 103; b.update(1); b.finish()
+    eq(t:snapshot().fraction, 1)
+    t:phase("Preparing", { items = 4 }); t:item_done(); t:item_done()
+    local s2 = t:snapshot()
+    eq(s2.fraction, 0.5); eq(s2.detail, "2 of 4 file(s)")
+    t:phase("Saving"); eq(t:snapshot().fraction, nil, "unknown length -> indeterminate")
+    t:finish(); truthy(seen.ended)
+  end)
+end)
+
+test("progress tracker: updates are throttled but phase changes always show", function()
+  with_fake_clock(function(clock)
+    local n = 0
+    local t = progress_mod.new({ progress = function() n = n + 1 end, progress_end = function() end })
+    t:phase("A", { total_bytes = 1000 })
+    local j = t:job(1000)
+    local before = n
+    for i = 1, 50 do j.update(i / 100) end                 -- 50 updates within the same instant
+    eq(n, before, "no redraw storm")
+    clock.t = 1; j.update(0.9); eq(n, before + 1)
+    t:phase("B"); eq(n, before + 2)
+  end)
+end)
+
+test("curl config: transfers have no total time limit but abort on stall; JSON calls are bounded", function()
+  local dir = ROOT .. "/fakecurl"
+  fs.mkdir(dir)
+  local log = dir .. "/cfgs.txt"
+  local fake = dir .. "/curl"
+  fs.write(fake, "#!/bin/sh\ncat \"$2\" >> '" .. log .. "'\necho '#### ----' >> '" .. log .. "'\nprintf 200\n")
+  os.execute("chmod +x '" .. fake .. "'")
+  http.curl = fake
+  fs.write(dir .. "/f.bin", "x")
+  async.run(function()
+    http.request({ url = "http://x/up", method = "PUT", upload_file = dir .. "/f.bin" })
+    http.request({ url = "http://x/dl", output_file = dir .. "/out.bin" })
+    http.request({ url = "http://x/json", json = { a = 1 } })
+  end)
+  http.curl = nil
+  local cfgs = {}
+  for block in (fs.read(log) .. ""):gmatch("(.-)#### ----\n") do cfgs[#cfgs + 1] = block end
+  eq(#cfgs, 3)
+  for i = 1, 2 do
+    truthy(cfgs[i]:find("speed%-limit = 1024") and cfgs[i]:find("speed%-time = 120"), "stall detection: transfer " .. i)
+    truthy(cfgs[i]:find("progress%-bar"), "progress meter on")
+    truthy(not cfgs[i]:find("max%-time"), "no total time limit on transfer " .. i)
+    truthy(cfgs[i]:find("connect%-timeout = 30") and cfgs[i]:find("retry = 3"))
+  end
+  truthy(cfgs[3]:find("max%-time = 120") and cfgs[3]:find("silent") and not cfgs[3]:find("speed%-limit"), "json call bounded")
 end)
 
 test("fs.native only converts slashes on Windows", function()
@@ -791,6 +878,50 @@ test("HQ sync uploads the Ogg and the untouched original WAV; chunks still refer
   truthy(m.tracks:find("HQ take").chunk:find(hq_song.wav1, 1, true), "owner still points at the original file")
 end)
 
+test("progress: a real throttled upload reports rising fractions ending at 1, and the file arrives intact", function()
+  local m = hq_song.hq
+  local pid = m.store.project_load().project_id
+  local big = ROOT .. "/big-progress.wav"
+  local parts = { "RIFF\36\0\0\0WAVEfmt " }
+  for _ = 1, 24 do parts[#parts + 1] = string.rep(string.char(math.random(0, 255)), 1024 * 1024) end  -- 24 MB
+  fs.write(big, table.concat(parts))
+  local sha = async.run(function() return m.media:hash_file(big) end)
+  local seen = {}
+  local res = async.run(function()
+    return http.request({ url = URL .. "/projects/" .. pid .. "/blobs/" .. sha, method = "PUT", upload_file = big,
+      headers = m.api:_headers(), limit_rate = "12M", on_progress = function(f) seen[#seen + 1] = f end })
+  end)
+  eq(res.status, 200, res.err)
+  truthy(#seen >= 3, "several progress updates, got " .. #seen)
+  for i = 2, #seen do truthy(seen[i] >= seen[i - 1], "monotonic") end
+  eq(seen[#seen], 1)
+  local dest = ROOT .. "/big-progress.dl"
+  local dseen = {}
+  async.run(function() m.api:get_blob(pid, sha, dest, function(f) dseen[#dseen + 1] = f end) end)
+  eq(fs.size(dest), fs.size(big), "downloaded size matches"); eq(dseen[#dseen], 1)
+end)
+
+test("a sync shows progress phases and always closes the progress window", function()
+  local m = hq_song.hq
+  local labels = {}
+  for _, snap in ipairs(m.ui.progress_log) do labels[snap.label] = true end
+  truthy(labels["Uploading audio"] or labels["Uploading high-quality audio"], "an upload phase was shown")
+  truthy(labels["Preparing audio (encoding to Ogg)"], "a preparing phase was shown")
+  truthy(m.ui.progress_ended >= 1, "window closed")
+  local last_upload
+  for _, snap in ipairs(m.ui.progress_log) do
+    if snap.label == "Uploading high-quality audio" then last_upload = snap end
+  end
+  truthy(last_upload and last_upload.detail:find(" of ", 1, true), "byte counts shown: " .. tostring(last_upload and last_upload.detail))
+  -- even a failing sync closes the window and still raises the error
+  local before = m.ui.progress_ended
+  m.store.cfg_set("token@" .. m.api:base(), "rch_invalid")
+  local ok, err = pcall(function() return m:sync() end)
+  truthy(not ok, "sync failed with a bad token")
+  eq(m.ui.progress_ended, before + 1, "progress window closed on error")
+  m:run(function() m.eng:login() end)               -- restore a valid token for the remaining tests
+end)
+
 test("HQ sync pulls the WAV where one exists and the Ogg where it doesn't", function()
   local m = machine("hql")
   hq_song.hql = m
@@ -869,6 +1000,132 @@ test("other lossless formats get a WAV companion; lossy sources get none", funct
   local bytes = fs.read(dest)
   eq(bytes:sub(1, 4), "RIFF"); eq(bytes:sub(9, 12), "WAVE", "FLAC converted to a real WAV")
   eq(next(lookup_variants(m, { (track_ogg(m, "OggTrack")) })), nil, "lossy source: no companion")
+end)
+
+-- ---- Cancel ---------------------------------------------------------------------------------------
+test("proc.kill_command per OS", function()
+  on("macos", function() eq(proc.kill_command("1234", nil), '/bin/sh -c "kill 1234"'); eq(proc.kill_command(nil, nil), nil) end)
+  on("linux", function() eq(proc.kill_command("77", nil), '/bin/sh -c "kill 77"') end)
+  on("windows", function()
+    local c = proc.kill_command(nil, "C:\\Users\\o'brien\\h[1].cfg")
+    truthy(c:find("powershell.exe", 1, true) and c:find("Stop-Process", 1, true) and c:find("Win32_Process", 1, true))
+    truthy(c:find("o''brien", 1, true), "single quote doubled"); truthy(c:find("h`[1`].cfg", 1, true), "wildcard chars escaped")
+    eq(proc.kill_command(nil, nil), nil, "nothing to match on")
+  end)
+end)
+
+test("a running process can be killed and its job still completes", function()
+  if platform.is_windows() then return end
+  proc.tmp = proc.tmp or (ROOT .. "/procs")
+  local t0 = os.time()
+  local code = async.run(function()
+    local job = proc.start({ "sleep", "60" })
+    async.sleep(1)
+    job:kill()
+    local done = proc.wait(job, { timeout = 10 })
+    truthy(done, "job finished after kill")
+    return job:result().code
+  end)
+  truthy(code ~= 0, "killed, so non-zero exit: " .. tostring(code))
+  truthy(os.time() - t0 < 10, "did not wait for the 60 s sleep")
+end)
+
+test("ffmpeg is stopped on cancel and leaves no partial file", function()
+  if platform.is_windows() then return end
+  local dir = ROOT .. "/cancel-ffmpeg"
+  fs.mkdir(dir)
+  local fake = dir .. "/ffmpeg"
+  fs.write(fake, "#!/bin/sh\nfor a; do last=$a; done\necho partial > \"$last\"\nsleep 60\n")
+  os.execute("chmod +x '" .. fake .. "'")
+  write_wav_early(dir .. "/in.wav")
+  local m = media_mod.new({ store = store_mod.memory(dir .. "/s"), ffmpeg = fake, project_id = function() return "p" end })
+  cancel.reset()
+  local t0 = os.time()
+  local ok, err = pcall(function()
+    return async.run(function()
+      async.spawn(function() async.sleep(1) cancel.request() end)
+      return m:prepare_upload(dir .. "/in.wav")
+    end)
+  end)
+  cancel.reset()
+  truthy(not ok and tostring(err):find("Cancelled", 1, true), tostring(err))
+  truthy(os.time() - t0 < 15, "stopped promptly")
+  for _, f in ipairs({ ".tmp" }) do
+    local left = io.popen("ls -a '" .. m:dir() .. "' | grep -c '^\\.tmp-'"):read("a")
+    eq(tonumber(left), 0, "partial transcode removed")
+  end
+end)
+
+test("cancelling a real upload stops it mid-way and the server stores nothing", function()
+  local m = hq_song and hq_song.hq or alice
+  local pid = m.store.project_load().project_id
+  local big = ROOT .. "/cancel-big.wav"
+  local parts = { "RIFF\36\0\0\0WAVEfmt " }
+  for _ = 1, 24 do parts[#parts + 1] = string.rep(string.char(math.random(0, 255)), 1024 * 1024) end
+  fs.write(big, table.concat(parts))
+  local sha = async.run(function() return m.media:hash_file(big) end)
+  cancel.reset()
+  local t0 = os.time()
+  local ok, err = pcall(function()
+    return async.run(function()
+      return http.request({ url = URL .. "/projects/" .. pid .. "/blobs/" .. sha, method = "PUT", upload_file = big,
+        headers = m.api:_headers(), limit_rate = "3M", on_progress = function(f) if f > 0.1 then cancel.request() end end })
+    end)
+  end)
+  cancel.reset()
+  truthy(not ok and tostring(err):find("Cancelled", 1, true), tostring(err))
+  truthy(os.time() - t0 < 6, "stopped long before the ~8 s the full upload would take")
+  local missing = m:run(function() return m.api:blobs_missing(pid, { sha }) end)
+  eq(missing[1], sha, "server did not store the partial upload")
+end)
+
+test("a cancelled sync stops at the next safe point and the next sync finishes the job", function()
+  local m = machine("canceller")
+  m:run(function() m.eng:login() end)
+  m:run(function() m.eng:share("Cancel Song") end)
+  local wav = ROOT .. "/cancel-take.wav"
+  write_wav(wav, 1, 392)
+  m.tracks:add_track("Take", m:folder(), wav)
+  local real_progress = m.ui.progress
+  m.ui.progress = function(self, snap)                       -- the user presses Cancel as uploading begins
+    if snap.label == "Uploading audio" then cancel.request() end
+    return real_progress(self, snap)
+  end
+  local ok, err = pcall(function() return m:sync() end)
+  truthy(not ok, "sync was cancelled")
+  eq(m.ui.progress_ended >= 1, true, "progress window closed")
+  m.ui.progress = real_progress
+  local s = m:sync()                                          -- cancel flag is reset; picks up where it left off
+  eq(s.pushed, 2, "folder and track pushed now"); eq(s.conflicts, 0)
+  eq(m:sync().pushed, 0)
+end)
+
+test("progress window Cancel button (and Esc) request cancellation", function()
+  local W = dofile("tests/fake_reaper.lua")(ROOT .. "/cancelui", {})
+  _G.reaper, _G.gfx = W.R, W.gfx
+  local win = require("reach.progressui")
+  win.delay = 0
+  cancel.reset()
+  local function frame(n) for _ = 1, n or 1 do local b = W.deferred W.deferred = {} for _, f in ipairs(b) do f() end end end
+  win.show({ label = "Uploading audio", fraction = 0.4, detail = "x" })
+  frame()                                                    -- window opens
+  truthy(W.gfx_log.inits == 1, "window opened")
+  W.gfx.mouse_x, W.gfx.mouse_y, W.gfx.mouse_cap = 10, 10, 1; frame()          -- pressing elsewhere does nothing
+  W.gfx.mouse_cap = 0; frame()
+  eq(cancel.requested, false)
+  local bx, by = W.gfx.w - 96 - 20 + 10, W.gfx.h - 26 - 14 + 10                -- inside the button
+  W.gfx.mouse_x, W.gfx.mouse_y, W.gfx.mouse_cap = bx, by, 1; frame()          -- press
+  eq(cancel.requested, false, "not until released")
+  W.gfx.mouse_cap = 0; frame()                                                 -- release
+  eq(cancel.requested, true, "released inside the button")
+  frame()                                                                      -- next redraw
+  truthy(table.concat(W.gfx_log.strings, "|"):find("Cancelling", 1, true), "button shows it is cancelling")
+  win.close()
+  cancel.reset()
+  win.show({ label = "x" }); frame()
+  W.gfx.char = 27; frame()
+  eq(cancel.requested, true, "Esc cancels"); W.gfx.char = 0
+  win.close(); cancel.reset()
 end)
 
 test("same user in a second project reuses their existing folder instead of creating another", function()

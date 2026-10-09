@@ -84,6 +84,12 @@ function Api:restore(id, guid, rev)
     { json_text = rev and ('{"rev":' .. math.floor(rev) .. '}') or "{}" })
 end
 
+-- { [sha] = bytes } for blobs the project has (to size download progress).
+function Api:blob_sizes(id, hashes)
+  if #hashes == 0 then return {} end
+  return self:call("POST", "/projects/" .. id .. "/blobs/info", { hashes = hashes }).sizes
+end
+
 function Api:blobs_missing(id, hashes)
   if #hashes == 0 then return {} end
   return self:call("POST", "/projects/" .. id .. "/blobs/missing", { hashes = hashes }).missing
@@ -112,15 +118,15 @@ function Api:hq_link(id, links)
   return self:call("POST", "/projects/" .. id .. "/hq", { links = links }).results
 end
 
-function Api:put_blob(id, sha, path)
+function Api:put_blob(id, sha, path, on_progress)
   local res = http.request({ url = self:base() .. "/projects/" .. id .. "/blobs/" .. sha, method = "PUT",
-                             upload_file = path, headers = self:_headers(), timeout = 3600 })
+                             upload_file = path, headers = self:_headers(), on_progress = on_progress })
   return check(res)
 end
 
-function Api:get_blob(id, sha, dest)
+function Api:get_blob(id, sha, dest, on_progress)
   local res = http.request({ url = self:base() .. "/projects/" .. id .. "/blobs/" .. sha, method = "GET",
-                             output_file = dest, headers = self:_headers(), timeout = 3600 })
+                             output_file = dest, headers = self:_headers(), on_progress = on_progress })
   if res.status ~= 200 then
     require("reach.fs").remove(dest)
     error({ msg = "download failed (HTTP " .. res.status .. ")" .. (res.err and (": " .. res.err) or ""),

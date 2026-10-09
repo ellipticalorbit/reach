@@ -7,6 +7,7 @@ local platform = require("reach.platform")
 local proc = require("reach.proc")
 local async = require("reach.async")
 local sha256 = require("reach.sha256")
+local cancel = require("reach.cancel")
 local json = require("reach.json")
 
 local Media = {}
@@ -89,13 +90,13 @@ end
 function Media:hash_file(path)
   local size = fs.size(path)
   if size and size > NATIVE_HASH_ABOVE then
-    local res = proc.run(media.hash_command(path), 3600)
+    local res = proc.run(media.hash_command(path), 3600, { match = path, cancellable = true })
     if res and res.code == 0 then
       local h = media.parse_hash(res.stdout)
       if h then return h end
     end
   end
-  return sha256.file(path, async.yield)
+  return sha256.file(path, function() async.yield() cancel.check() end)
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -168,7 +169,8 @@ function Media:_transcode(path, ext, codec_args)
   argv[#argv + 1] = "-f"
   argv[#argv + 1] = ext
   argv[#argv + 1] = tmp
-  local res, why = proc.run(argv, 3600)
+  local ok, res, why = pcall(proc.run, argv, 3600, { match = tmp, cancellable = true })
+  if not ok then fs.remove(tmp) error(res, 0) end        -- cancelled: remove the partial file and propagate
   if not res then fs.remove(tmp) return nil, "ffmpeg: " .. tostring(why) end
   if res.code ~= 0 or not fs.exists(tmp) then
     fs.remove(tmp)
@@ -248,18 +250,20 @@ end
 -- Fetching
 ---------------------------------------------------------------------------------------------------
 
-local function download(self, sha, dest)
+local function download(self, sha, dest, on_progress)
   if fs.exists(dest) then return dest end
   local tmp = dest .. ".part"
-  self.env.api:get_blob(self.env.project_id(), sha, tmp)
+  self.env.api:get_blob(self.env.project_id(), sha, tmp, on_progress)
   assert(fs.rename(tmp, dest))
   return dest
 end
 
 -- Make sure the canonical <sha>.ogg is in the project's media folder. Returns its path.
-function Media:ensure_local(sha) return download(self, sha, self:path_for(sha)) end
+function Media:ensure_local(sha, on_progress) return download(self, sha, self:path_for(sha), on_progress) end
 
 -- Fetch the WAV companion (blob `wav_sha`) of the Ogg `ogg_sha` as <ogg_sha>.hq.wav. Returns its path.
-function Media:ensure_hq(ogg_sha, wav_sha) return download(self, wav_sha, self:hq_path(ogg_sha)) end
+function Media:ensure_hq(ogg_sha, wav_sha, on_progress)
+  return download(self, wav_sha, self:hq_path(ogg_sha), on_progress)
+end
 
 return media

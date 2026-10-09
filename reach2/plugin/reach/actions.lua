@@ -45,7 +45,11 @@ local function run(plugin_dir, name, fn, build_opts)
   reaper.SetExtState("Reach", "busy", tostring(os.time()), false)
   require("reach.async").start(function() fn(engine, ui, store) end, function(task)
     reaper.DeleteExtState("Reach", "busy", false)
-    if not task.ok then
+    if not task.ok and type(task.err) == "table" and task.err.cancelled then
+      ui:log(name .. " cancelled.")
+      ui:info("Reach", name .. " cancelled.\n\nNothing is lost. Run it again to carry on: anything already uploaded " ..
+        "or downloaded isn't repeated, and tracks pulled before you cancelled are already in your project.")
+    elseif not task.ok then
       local e = task.err or {}
       local msg = type(e) == "table" and (e.msg or "unknown error") or tostring(e)
       if type(e) == "table" and e.unauthorized then

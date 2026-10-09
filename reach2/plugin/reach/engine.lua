@@ -10,6 +10,8 @@ local keys = require("reach.keys")
 local sha256 = require("reach.sha256")
 local async = require("reach.async")
 local fs = require("reach.fs")
+local progress = require("reach.progress")
+local cancel = require("reach.cancel")
 
 local Engine = {}
 Engine.__index = Engine
@@ -171,6 +173,52 @@ function Engine:localize(chunk)
   end)
 end
 
+-- Run `fn(item, on_progress)` for each item (3 at a time) as one byte-measured phase. items: { size = bytes, ... }
+function Engine:run_transfers(label, items, fn)
+  local total = 0
+  for _, it in ipairs(items) do total = total + (it.size or 0) end
+  local tracker = self._tracker
+  tracker:phase(label, { total_bytes = total > 0 and total or nil, items = #items })
+  local jobs = {}
+  for i, it in ipairs(items) do
+    jobs[i] = function()
+      local j = tracker:job(it.size)
+      fn(it, j.update)
+      j.finish()
+    end
+  end
+  async.parallel(jobs, 3)
+end
+
+-- Download audio for these Ogg shas: the WAV companion where `variants` has one, else the Ogg itself.
+-- Files we already have are skipped. Counts WAV downloads in summary.hq_downloaded.
+function Engine:download_audio(pid, shas, variants, summary)
+  local todo, blobs = {}, {}
+  for _, sha in ipairs(shas) do
+    local wav = variants[sha]
+    local have = fs.exists(wav and self.media:hq_path(sha) or self.media:path_for(sha))
+    if not have then
+      todo[#todo + 1] = { sha = sha, wav = wav, blob = wav or sha }
+      blobs[#blobs + 1] = wav or sha
+    end
+  end
+  if #todo == 0 then return end
+  -- Sizes only make the progress bar accurate; an older server without the endpoint must not break the sync.
+  local ok, sizes = pcall(function() return self.api:blob_sizes(pid, blobs) end)
+  if not ok then sizes = {} end
+  for _, it in ipairs(todo) do it.size = sizes[it.blob] or 0 end
+  local label = "Downloading audio"
+  for _, it in ipairs(todo) do if it.wav then label = "Downloading audio (high quality where available)" break end end
+  self:run_transfers(label, todo, function(it, on_progress)
+    if it.wav then
+      self.media:ensure_hq(it.sha, it.wav, on_progress)
+      summary.hq_downloaded = summary.hq_downloaded + 1
+    else
+      self.media:ensure_local(it.sha, on_progress)
+    end
+  end)
+end
+
 -- HQ sync, local side: audio we already have as an Ogg may have a WAV companion on the server now. Fetch those
 -- and point the tracks at them (fingerprints are unaffected, see canonical()).
 function Engine:upgrade_local_media(pid, summary)
@@ -184,15 +232,9 @@ function Engine:upgrade_local_media(pid, summary)
   end
   if #order == 0 then return end
   local variants = self.api:hq_lookup(pid, order)
-  local jobs = {}
-  for sha, wav in pairs(variants) do
-    if not fs.exists(self.media:hq_path(sha)) then jobs[#jobs + 1] = function() return self.media:ensure_hq(sha, wav) end end
-  end
-  if #jobs > 0 then
-    self.ui:log("Downloading " .. #jobs .. " high-quality file(s)...")
-    async.parallel(jobs, 3)
-    summary.hq_downloaded = summary.hq_downloaded + #jobs
-  end
+  local with_wav = {}
+  for _, sha in ipairs(order) do if variants[sha] then with_wav[#with_wav + 1] = sha end end
+  self:download_audio(pid, with_wav, variants, summary)
   local items = {}
   for _, t in ipairs(snap) do
     local touched = false
@@ -238,10 +280,12 @@ function Engine:upload_hq_companions(pid, summary)
   if #todo == 0 then return end
 
   ui:log("Preparing " .. #todo .. " high-quality file(s)...")
+  self._tracker:phase("Preparing high-quality audio", { items = #todo })
   local jobs = {}
   for i, ogg in ipairs(todo) do
     jobs[i] = function()
       local wav, why = self.media:prepare_wav(source_of[ogg])
+      self._tracker:item_done()
       return { ogg = ogg, wav = wav, why = why, path = source_of[ogg] }
     end
   end
@@ -257,9 +301,13 @@ function Engine:upload_hq_companions(pid, summary)
   local missing = api:blobs_missing(pid, wav_shas)
   if #missing > 0 then
     ui:log("Uploading " .. #missing .. " high-quality file(s)...")
-    local up = {}
-    for i, h in ipairs(missing) do up[i] = function() api:put_blob(pid, h, self.media:upload_path(h, "wav")) end end
-    async.parallel(up, 3)
+    local items = {}
+    for i, h in ipairs(missing) do
+      items[i] = { key = h, size = fs.size(self.media:upload_path(h, "wav")) or 0 }
+    end
+    self:run_transfers("Uploading high-quality audio", items, function(it, on_progress)
+      api:put_blob(pid, it.key, self.media:upload_path(it.key, "wav"), on_progress)
+    end)
   end
   for _, r in ipairs(api:hq_link(pid, links)) do
     if r.status == "linked" then summary.hq_uploaded = summary.hq_uploaded + 1 end
@@ -351,7 +399,17 @@ end
 ---------------------------------------------------------------------------------------------------
 
 -- opts.hq: also upload the lossless originals, and prefer them when downloading.
+-- Shows a progress window (via the UI) for the duration.
 function Engine:sync(opts)
+  cancel.reset()
+  self._tracker = progress.new(self.ui)
+  local ok, result = pcall(self._sync, self, opts)
+  self._tracker:finish()
+  if not ok then error(result, 0) end
+  return result
+end
+
+function Engine:_sync(opts)
   local hq = opts and opts.hq or false
   local st = self.store.project_load()
   if not st or not st.project_id then
@@ -365,6 +423,7 @@ function Engine:sync(opts)
 
   self:ensure_login()
   ui:log("Syncing with the server...")
+  self._tracker:phase("Contacting the server")
   local me = api:me()
   local feed = api:changes(pid, st.seq)
   local locals = self:scan(st, feed.tracks)
@@ -450,18 +509,7 @@ function Engine:sync(opts)
   if #need > 0 then
     -- HQ: take the WAV companion where there is one, the Ogg where there isn't. LQ: always the Ogg.
     local variants = hq and api:hq_lookup(pid, need) or {}
-    ui:log("Downloading " .. #need .. " audio file(s)...")
-    local jobs = {}
-    for i, sha in ipairs(need) do
-      jobs[i] = function()
-        if variants[sha] then
-          summary.hq_downloaded = summary.hq_downloaded + 1
-          return self.media:ensure_hq(sha, variants[sha])
-        end
-        return self.media:ensure_local(sha)
-      end
-    end
-    async.parallel(jobs, 3)
+    self:download_audio(pid, need, variants, summary)
   end
 
   local items = {}
@@ -552,10 +600,12 @@ function Engine:sync(opts)
   local sha_of, bad = {}, {}
   if #path_list > 0 then
     ui:log("Preparing " .. #path_list .. " audio file(s) (transcoding to Ogg)...")
+    self._tracker:phase("Preparing audio (encoding to Ogg)", { items = #path_list })
     local jobs = {}
     for i, p in ipairs(path_list) do
       jobs[i] = function()
         local sha, why = self.media:prepare_upload(p)
+        self._tracker:item_done()
         return { path = p, sha = sha, why = why }
       end
     end
@@ -604,11 +654,11 @@ function Engine:sync(opts)
     local missing = api:blobs_missing(pid, hashes)
     if #missing == 0 then return end
     ui:log("Uploading " .. #missing .. " audio file(s)...")
-    local jobs = {}
-    for i, h in ipairs(missing) do
-      jobs[i] = function() api:put_blob(pid, h, self.media:upload_path(h, "ogg")) end
-    end
-    async.parallel(jobs, 3)
+    local items = {}
+    for i, h in ipairs(missing) do items[i] = { key = h, size = fs.size(self.media:upload_path(h, "ogg")) or 0 } end
+    self:run_transfers("Uploading audio", items, function(it, on_progress)
+      api:put_blob(pid, it.key, self.media:upload_path(it.key, "ogg"), on_progress)
+    end)
   end
 
   if #push_items > 0 then
@@ -616,6 +666,7 @@ function Engine:sync(opts)
     for h in pairs(wanted) do hashes[#hashes + 1] = h end
     table.sort(hashes)
     upload_blobs(hashes)
+    self._tracker:phase("Saving tracks to the server")
     local result, missing = api:push(pid, push_items)
     if not result then -- server lost track of a blob (e.g. purged): re-upload and retry once
       upload_blobs(missing)
@@ -644,6 +695,7 @@ function Engine:sync(opts)
   if hq then
     local ok, err = pcall(function() self:upload_hq_companions(pid, summary) end)
     if not ok then
+      if type(err) == "table" and err.cancelled then error(err, 0) end   -- a cancel is not a "problem"
       summary.hq_error = type(err) == "table" and (err.msg or "unknown error") or tostring(err)
       ui:log("High-quality upload problem: " .. summary.hq_error)
     end

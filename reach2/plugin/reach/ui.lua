@@ -64,6 +64,10 @@ function ui.reaper()
   end
 
   function u:clipboard(text) if R.CF_SetClipboard then R.CF_SetClipboard(text) end end
+
+  -- state: { label, fraction (0..1 or nil if unknown), detail }
+  function u:progress(state) require("reach.progressui").show(state) end
+  function u:progress_end() require("reach.progressui").close() end
   return u
 end
 
@@ -88,6 +92,9 @@ function ui.headless(opts)
   end
   function u:open_url(url) if opts.open_url then opts.open_url(url) end end
   function u:clipboard() end
+  u.progress_log, u.progress_ended = {}, 0
+  function u:progress(state) self.progress_log[#self.progress_log + 1] = state end
+  function u:progress_end() self.progress_ended = self.progress_ended + 1 end
   u.orphan_prompts = {}
   function u:confirm_orphans(names)
     self.orphan_prompts[#self.orphan_prompts + 1] = names

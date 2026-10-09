@@ -140,6 +140,19 @@ local function new_world(root, opts)
   function R.time_precise() return os.time() end
   function R.defer(fn) W.deferred[#W.deferred + 1] = fn end
 
+  -- minimal gfx: records what the progress window does
+  W.gfx_log = { inits = 0, quits = 0, strings = {}, updates = 0 }
+  local G = { w = 500, h = 150, x = 0, y = 0, mouse_x = 0, mouse_y = 0, mouse_cap = 0, char = 0 }
+  function G.init() W.gfx_log.inits = W.gfx_log.inits + 1 return 1 end
+  function G.quit() W.gfx_log.quits = W.gfx_log.quits + 1 end
+  function G.getchar() return G.char end
+  function G.measurestr(str) return #str * 8, 16 end
+  function G.update() W.gfx_log.updates = W.gfx_log.updates + 1 end
+  function G.drawstr(str) W.gfx_log.strings[#W.gfx_log.strings + 1] = str end
+  G.set, G.rect, G.setfont = function() end, function() end, function() end
+  W.gfx = G
+  function R.GetMousePosition() return 100, 100 end
+
   W.R = R
   -- run deferred callbacks until none remain
   function W.pump()

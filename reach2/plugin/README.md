@@ -23,6 +23,16 @@ or have REAPER's action list import the `Reach_*.lua` files:
 Needs the SWS extension for large tracks, the clipboard and opening the browser (falls back gracefully
 where it can). The project must be saved: sync state lives in the project file.
 
+## Progress and timeouts
+Sync shows a small progress window (drawn with REAPER's built-in `gfx`; no extensions needed) once a sync has run
+for a second: the current step, a bar, bytes done, speed and time left. Uploads and downloads report real byte
+progress from curl, summed across the transfers running in parallel. Closing the window only hides it; the sync
+continues. The window has a **Cancel** button (Esc works too): it stops the running upload, download or ffmpeg
+at once, removes any partial file, and ends the sync at the next safe point. Nothing is lost: running the sync again
+carries on, because finished uploads/downloads are never repeated and the server ignores partial uploads.
+Transfers have **no total time limit**: they are aborted only if they stall (under 1 KB/s for two
+minutes) and are retried automatically on transient failures. Ordinary API calls are limited to 2 minutes.
+
 ## How it works
 * Each person gets a top-level **Reach folder** (a folder track named after them). Everything inside a Reach
   folder is synced; tracks elsewhere are ignored. Use "Add selected tracks to my folder".
