@@ -319,6 +319,19 @@ function Tracks:adopt(folder_guid, wanted)
   return #adopt
 end
 
+-- A brand-new track at the end of the folder `folder_guid`, selected so it's ready to arm. Returns its guid.
+function Tracks:insert_track_in(folder_guid, name)
+  local idx = reaper.CountTracks(0)
+  reaper.InsertTrackAtIndex(idx, true)          -- with REAPER's default track settings
+  local tr = reaper.GetTrack(0, idx)
+  if name and name ~= "" then reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", name, true) end
+  local guid = reaper.GetTrackGUID(tr)
+  self:adopt(folder_guid, { [guid] = true })   -- moves it into the folder and fixes folder depths
+  reaper.SetOnlyTrackSelected(tr)
+  reaper.TrackList_AdjustWindows(false)
+  return guid
+end
+
 -- Same, for the currently selected tracks.
 function Tracks:adopt_selected(folder_guid)
   local wanted = {}

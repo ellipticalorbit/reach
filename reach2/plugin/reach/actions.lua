@@ -231,6 +231,15 @@ function actions.transfer(dir)
   end)
 end
 
+function actions.insert_track(dir)
+  run(dir, "Insert new track", function(engine, ui)
+    local name = ui:prompt("Insert new track", "Track name (optional)", "")
+    if name == nil then return end                 -- cancelled
+    engine:insert_track(name)
+    ui:log("New track added to your Reach folder" .. (name ~= "" and (": " .. name) or "") .. ".")
+  end)
+end
+
 function actions.add_selected(dir)
   run(dir, "Add tracks", function(engine, ui)
     local n = engine:adopt_selected()
@@ -276,15 +285,65 @@ function actions.settings(dir)
     local tb = require("reach.toolbar")
     local previous = tb.take_result(store.tmp_dir())
     if previous then ui:info("Reach: toolbar", "Last time, the toolbar change ended with: " .. previous) end
-    if ui:confirm("Reach settings", "Add Reach buttons (Sync LQ, Sync HQ, Join song, Share song) to your main toolbar?\n\n" ..
+    if ui:confirm("Reach settings", "Add a Reach button to your main toolbar? It opens a menu with all the Reach actions.\n\n" ..
         "REAPER only reads toolbar changes at startup, so they are added when you next quit REAPER. " ..
-        "Nothing is changed if the buttons are already there.") then
+        "Nothing is changed if the button is already there.") then
       local res = tb.install(dir, store.tmp_dir(), function(explanation)
         return ui:confirm("Reach: toolbar", explanation .. "\n\nCreate a separate 'Reach' toolbar instead?")
       end)
       ui:info("Reach: toolbar", res.message)
     end
   end)
+end
+
+-- The single "Reach" action: a popup menu at the mouse (a dropdown when run from a toolbar button) listing all
+-- the actions. Section titles are greyed-out items rather than separators, so every entry counts toward the
+-- index gfx.showmenu returns and the mapping can't be off by one.
+function actions.menu_items(store)
+  local st = store and store.project_load()
+  local linked = st ~= nil and st.project_id ~= nil   -- a real boolean: nil would read as "enabled"
+  local function item(label, fn, enabled) return { label = label, fn = fn, enabled = enabled ~= false } end
+  local function header(label) return { label = label, header = true } end
+  return {
+    header(linked and ("Song: " .. (st.name or "?")) or "This project isn't linked to a song"),
+    item("Sync (low quality)", "sync_lq", linked),
+    item("Sync (high quality)", "sync_hq", linked),
+    header("Song"),
+    item("Share this project as a new song...", "share", not linked),
+    item("Join a song...", "join"),
+    item("Show join code", "join_code", linked),
+    item("List my songs", "list_songs"),
+    header("Tracks"),
+    item("Insert new track in my folder...", "insert_track", linked),
+    item("Add selected tracks to my folder", "add_selected", linked),
+    item("Restore deleted tracks...", "restore", linked),
+    header("Admin"),
+    item("Change server...", "change_server", linked),
+    item("Transfer ownership...", "transfer", linked),
+    item("Log in", "login"),
+    item("Settings...", "settings"),
+  }
+end
+
+function actions.menu_string(items)
+  local parts = {}
+  for i, it in ipairs(items) do
+    local label = it.label:gsub("|", "/")
+    parts[i] = ((it.header or not it.enabled) and "#" or "") .. label
+  end
+  return table.concat(parts, "|")
+end
+
+function actions.menu(dir)
+  local store = require("reach.store").reaper()
+  local items = actions.menu_items(store)
+  local mx, my = reaper.GetMousePosition()
+  gfx.init("Reach", 0, 0, 0, mx, my)              -- invisible host window for the popup, at the mouse
+  gfx.x, gfx.y = 0, 0
+  local choice = gfx.showmenu(actions.menu_string(items))
+  gfx.quit()
+  local it = items[choice]
+  if it and not it.header and it.enabled and actions[it.fn] then actions[it.fn](dir) end
 end
 
 actions._build = build

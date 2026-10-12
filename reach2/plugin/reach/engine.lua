@@ -1034,6 +1034,14 @@ function Engine:_sync(opts)
   return summary
 end
 
+-- Insert a new track inside my own Reach folder (creating the folder if needed).
+function Engine:insert_track(name)
+  self:ensure_login()
+  local me = self.api:me()
+  local folder = self.tracks:ensure_folder(me)
+  return self.tracks:insert_track_in(folder, name)
+end
+
 -- Move the currently selected (unsynced) tracks into the user's own Reach folder.
 function Engine:adopt_selected()
   local me = self.api:me()

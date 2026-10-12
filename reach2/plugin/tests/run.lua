@@ -1340,6 +1340,20 @@ test("ownership: transferring the song moves those rights", function()
   eq(own.o.ui.foreign_seen[#own.o.ui.foreign_seen].kind, "edited")
 end)
 
+test("insert new track: lands at the end of my own folder and is pushed", function()
+  local m = own.b
+  m:run(function() return m.eng:insert_track("Overdub") end)
+  local folder = m.tracks:find("own-b").guid
+  eq(m.tracks:find("Overdub").parent, folder, "inside my folder")
+  local list = m.tracks:outline()
+  local pos_over, pos_b2
+  for i, l in ipairs(list) do if l == "  Overdub" then pos_over = i elseif l == "  B2" then pos_b2 = i end end
+  truthy(pos_over and pos_b2 and pos_over > pos_b2, "after my other tracks: " .. table.concat(list, ","))
+  eq(m:sync().pushed, 1)
+  own.a:sync()
+  eq(own.a.tracks:find("Overdub").parent, own.a.tracks:find("own-b").guid, "others see it in my folder")
+end)
+
 -- ---- Tempo -----------------------------------------------------------------------------------------
 local tsong = {}
 local function near(a, b, msg) if math.abs(a - b) > 1e-6 then error((msg or "") .. ": expected " .. b .. ", got " .. a, 2) end end

@@ -4,6 +4,10 @@ Syncs the tracks in a REAPER project with a Reach server. No git/rsync/Python: p
 (built into macOS and Windows 10+) for HTTP and the bundled `ffmpeg` for transcoding to Ogg Vorbis.
 
 ## Install
+The easiest way: add **`Reach.lua`** to the Action list and put it on a toolbar (Reach Settings can do that for
+you). It opens a menu with every Reach action, greying out the ones that don't apply to the current project. The
+individual scripts below remain available if you'd rather bind keys to them.
+
 Add the actions in this folder to REAPER (Actions > Show action list > New action > Load ReaScript...),
 or have REAPER's action list import the `Reach_*.lua` files:
 
@@ -15,6 +19,7 @@ or have REAPER's action list import the `Reach_*.lua` files:
 | `Reach_List_songs.lua` | Lists every song you're in, your role, and the join code for the ones you own |
 | `Reach_Show_join_code.lua` | Owner: shows/copies the join code and writes it into the project notes |
 | `Reach_Join_song.lua` | Paste a join code: opens a new project (you choose where to save it), links it and pulls everything |
+| `Reach_Insert_track.lua` | Insert a new track at the end of your Reach folder (no dragging needed) |
 | `Reach_Add_selected_tracks_to_my_folder.lua` | Moves selected tracks into your Reach folder |
 | `Reach_Sync_LQ.lua` | Pull, resolve conflicts, push. Audio travels as small Ogg Vorbis (quality 5) |
 | `Reach_Sync_HQ.lua` | The same, and also uploads your lossless originals and downloads other people's where they exist |

@@ -165,6 +165,7 @@ local function new_world(root, opts)
   function G.init() W.gfx_log.inits = W.gfx_log.inits + 1 return 1 end
   function G.quit() W.gfx_log.quits = W.gfx_log.quits + 1 end
   function G.getchar() return G.char end
+  function G.showmenu(str) W.menus = W.menus or {} W.menus[#W.menus + 1] = str return W.menu_choice or 0 end
   function G.measurestr(str) return #str * 8, 16 end
   function G.update() W.gfx_log.updates = W.gfx_log.updates + 1 end
   function G.drawstr(str) W.gfx_log.strings[#W.gfx_log.strings + 1] = str end

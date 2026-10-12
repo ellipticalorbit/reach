@@ -191,8 +191,7 @@ end
 
 -- REAPER side. Registers the scripts as actions and queues the toolbar. Returns { message = "..." }.
 function toolbar.install(plugin_dir, tmp_dir, offer_separate_toolbar)
-  local scripts = { { "Reach_Sync_LQ.lua", "Reach: Sync LQ" }, { "Reach_Sync_HQ.lua", "Reach: Sync HQ" },
-                    { "Reach_Join_song.lua", "Reach: Join song" }, { "Reach_Share_song.lua", "Reach: Share song" } }
+  local scripts = { { "Reach.lua", "Reach" } }   -- one button that opens the Reach menu
   local items = {}
   for _, s in ipairs(scripts) do
     local id = reaper.AddRemoveReaScript(true, 0, fs.native(plugin_dir .. s[1]), true)
@@ -209,7 +208,7 @@ function toolbar.install(plugin_dir, tmp_dir, offer_separate_toolbar)
     return { message = "The Reach buttons are already on a toolbar. Nothing to do." }
   elseif main.status == "patch" then
     toolbar.queue_replace(ini, text, main.patched, tmp_dir)
-    return { message = "The Sync, Join song and Share song actions are now in your Action list, and the buttons " ..
+    return { message = "The Reach action is now in your Action list, and its button " ..
       "will be added to your MAIN toolbar when you QUIT REAPER (REAPER only reads toolbars at startup).\n\n" ..
       "A backup is kept as reaper-menu.ini.reach-backup. If you change your toolbars before quitting, the edit " ..
       "is skipped to avoid overwriting your changes; run Reach Settings again afterwards." }
@@ -225,7 +224,7 @@ function toolbar.install(plugin_dir, tmp_dir, offer_separate_toolbar)
   local plan = toolbar.plan(text, items)
   if plan.status == "append" then
     toolbar.queue_append(ini, plan.section, tmp_dir)
-    return { message = "A separate 'Reach' toolbar with the three buttons will be added when you QUIT REAPER " ..
+    return { message = "A separate 'Reach' toolbar with the Reach button will be added when you QUIT REAPER " ..
       "(backup: reaper-menu.ini.reach-backup). After restarting, show it from the toolbar right-click menu." }
   elseif plan.status == "manual" then
     return { message = "A Reach toolbar or some of the buttons already exist, so I left your toolbars alone." }

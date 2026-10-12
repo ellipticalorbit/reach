@@ -151,6 +151,13 @@ function FT:ensure_folder(me)
   return g, true
 end
 
+function FT:insert_track_in(folder_guid, name)
+  local g = FT.guid()
+  self:_add(g, string.format('<TRACK\n  NAME "%s"\n  VOLPAN 1 0 -1 -1 1\n  TRACKID %s\n>', name or "", g), nil)
+  self:adopt(folder_guid, { [g] = true })
+  return g
+end
+
 function FT:folder_owners()
   local out = {}
   for _, r in ipairs(self.list) do

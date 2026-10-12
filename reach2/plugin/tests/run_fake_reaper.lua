@@ -33,6 +33,7 @@ local function world(name)
     input = function(title, caption, default)
       if title == "Share song" then return "Fake Song" end
       if title == "Join song" then return share_code end
+      if title == "Insert new track" then return "Overdub" end
       return default
     end,
   })
@@ -171,6 +172,38 @@ local ok, err = xpcall(function()
   check(b_hq and b_hq:find("1 downloaded", 1, true), "bob's Sync HQ downloaded it: " .. tostring(b_hq))
   local dchunk2 = select(2, B.R.GetTrackStateChunk(B.tracks[2]))
   check(dchunk2:find("%.hq%.wav") and dchunk2:find("<SOURCE WAVE", 1, true), "bob's Drums now plays the WAV")
+
+  -- the single Reach menu: lists everything, greys out what doesn't apply, and runs the chosen action
+  _G.reaper, _G.gfx = A.R, A.gfx
+  local items = actions.menu_items(require("reach.store").reaper())
+  local idx
+  for i, it in ipairs(items) do if it.fn == "join_code" then idx = i end end
+  A.menu_choice, A.clipboard = idx, nil
+  act(A, function() actions.menu(PLUGIN) end)
+  local menu = A.menus[#A.menus]
+  check(menu:find("Sync (low quality)", 1, true) and menu:find("Transfer ownership", 1, true), "menu lists the actions: " .. menu)
+  check(menu:find("#Share this project as a new song", 1, true) ~= nil, "share is greyed out in a linked project")
+  check(menu:find("#Song: ", 1, true) == 1, "song name shown as a header")
+  check(A.clipboard == share_code, "choosing 'Show join code' ran it: " .. tostring(A.clipboard))
+  -- "Insert new track in my folder" from the menu
+  for i, it in ipairs(items) do if it.fn == "insert_track" then idx = i end end
+  A.menu_choice = idx
+  act(A, function() actions.menu(PLUGIN) end)
+  check(outline(A):find("alice|  Drums|  Bass|  Loose|  Overdub|bob", 1, true) ~= nil, "new track inside alice's folder: " .. outline(A))
+  local sel
+  for _, t in ipairs(A.tracks) do if t.selected then sel = t end end
+  check(sel and (sel.name == "Overdub" or (sel.chunk or ""):find("Overdub", 1, true)), "the new track is selected")
+  act(A, function() actions.sync_lq(PLUGIN) end)
+  act(B, function() actions.sync_lq(PLUGIN) end)
+  check(outline(B):find("alice|  Drums|  Bass|  Loose|  Overdub|bob", 1, true) ~= nil, "and bob receives it there: " .. outline(B))
+  A.menu_choice = 0
+  act(A, function() actions.menu(PLUGIN) end)                     -- dismissing the menu does nothing
+  local fresh = new_world(ROOT .. "/unlinked", {})
+  _G.reaper, _G.gfx = fresh.R, fresh.gfx
+  local unlinked = actions.menu_string(actions.menu_items(require("reach.store").reaper()))
+  check(unlinked:find("#Sync (low quality)", 1, true) and not unlinked:find("#Share this project", 1, true),
+    "unlinked project: sync greyed out, share available: " .. unlinked)
+  A.menu_choice = nil
 
   -- a cancelled operation is reported calmly, not as a failure
   A.mb = {}
