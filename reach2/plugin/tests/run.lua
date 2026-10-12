@@ -978,6 +978,26 @@ test("HQ sync attaches companions to tracks that were pushed earlier in LQ", fun
   truthy(hq_song.lql.tracks:find("LQ take").chunk:match('FILE "([^"]+)"'):match("%.hq%.wav$"))
 end)
 
+test("REPRO: tracks pushed before (no encode record on this machine) still get their WAV on Sync HQ", function()
+  local m = machine("legacy")
+  m:run(function() m.eng:login() end)
+  m:run(function() m.eng:share("Legacy Song") end)
+  local wav = ROOT .. "/legacy-take.wav"
+  write_wav(wav, 1, 349)
+  m.tracks:add_track("Old take", m:folder(), wav)
+  eq(m:sync().pushed, 2)                                   -- an LQ push, as in earlier versions
+  -- simulate "pushed by an older plugin version / cache lost": this machine no longer knows which Ogg it made
+  os.remove(m.store.media_index_path())
+  m.media.index = nil
+  local s = m:sync({ hq = true })
+  eq(s.pushed, 0, "nothing changed")
+  eq(s.hq_uploaded, 1, "the WAV is uploaded anyway")
+  local ogg = track_ogg(m, "Old take")
+  truthy(lookup_variants(m, { ogg })[ogg], "companion exists on the server and is linked to the Ogg the track uses")
+  local again = m:sync({ hq = true })
+  eq(again.hq_uploaded, 0, "and only once"); eq(again.hq_already, 1, "reported as already there")
+end)
+
 test("other lossless formats get a WAV companion; lossy sources get none", function()
   local m = machine("fmt")
   m:run(function() m.eng:login() end)
