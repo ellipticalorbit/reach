@@ -35,16 +35,36 @@ local function build(plugin_dir, opts)
 end
 
 -- Run fn(engine, ui, store) as a task with busy-guard and error reporting.
+-- One Reach operation at a time. A running operation refreshes a heartbeat ("busy" = "<time>|<name>") every
+-- half second, so if it stops for any reason (finished, failed, or REAPER terminated the script) the lock frees
+-- itself within a few seconds. Another action started meanwhile can ask the running one to stop: each action
+-- run loads its own copy of the modules, so the request travels through ExtState ("cancel").
+local HEARTBEAT_STALE = 5
+
+local function running_operation()
+  local t, who = reaper.GetExtState("Reach", "busy"):match("^([%d%.]+)|(.*)$")
+  if t and reaper.time_precise() - tonumber(t) < HEARTBEAT_STALE then return who end
+  return nil
+end
+
 local function run(plugin_dir, name, fn, build_opts)
-  local busy = reaper.GetExtState("Reach", "busy")
-  if busy ~= "" and (os.time() - (tonumber(busy) or 0)) < 600 then
-    reaper.MB("Another Reach operation is still running.", "Reach", 0)
+  local other = running_operation()
+  if other then
+    if reaper.MB("Another Reach operation is still running: " .. other .. ".\n\nStop it?", "Reach", 4) == 6 then
+      reaper.SetExtState("Reach", "cancel", "1", false)
+    end
     return
   end
+  reaper.DeleteExtState("Reach", "cancel", false)
   local engine, ui, store = build(plugin_dir, build_opts)
-  reaper.SetExtState("Reach", "busy", tostring(os.time()), false)
-  require("reach.async").start(function() fn(engine, ui, store) end, function(task)
+  local async, cancel = require("reach.async"), require("reach.cancel")
+  local function heartbeat()
+    reaper.SetExtState("Reach", "busy", ("%.3f|%s"):format(reaper.time_precise(), name), false)
+  end
+  heartbeat()
+  local main = async.start(function() fn(engine, ui, store) end, function(task)
     reaper.DeleteExtState("Reach", "busy", false)
+    reaper.DeleteExtState("Reach", "cancel", false)
     if not task.ok and type(task.err) == "table" and task.err.cancelled then
       ui:log(name .. " cancelled.")
       ui:info("Reach", name .. " cancelled.\n\nNothing is lost. Run it again to carry on: anything already uploaded " ..
@@ -59,6 +79,13 @@ local function run(plugin_dir, name, fn, build_opts)
       ui:log(name .. " failed: " .. msg)
       if type(e) == "table" and e.trace and not e.user then ui:log(e.trace) end
       ui:info("Reach: " .. name .. " failed", msg)
+    end
+  end)
+  async.start(function()                       -- heartbeat, and listen for "stop" from another action
+    while not main.done do
+      heartbeat()
+      if reaper.GetExtState("Reach", "cancel") == "1" then cancel.request() end
+      async.sleep(0.5)
     end
   end)
 end

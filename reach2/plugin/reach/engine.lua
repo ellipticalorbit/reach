@@ -173,6 +173,7 @@ function Engine:fetch_missing_oggs(old_url, old_pid)
     if got then fs.rename(dest .. ".part", dest) else failed = failed + 1 end
   end)
   self._tracker:finish()
+  self._tracker = nil
   if not ok then error(err, 0) end
   if failed > 0 then
     fail(failed .. " audio file(s) are only on the old server (" .. tostring(old_url) .. ") and couldn't be fetched. " ..
@@ -194,20 +195,37 @@ function Engine:login()
   self.ui:log("Opening browser to sign in. If it doesn't open, go to " .. base .. "/device and enter code " ..
               d.user_code)
   self.ui:open_url(base .. "/device?user_code=" .. d.user_code)
-  local deadline = async.clock() + d.expires_in
-  while async.clock() < deadline do
-    async.sleep(d.interval or 3)
-    local token, why = self.api:device_poll(d.device_code)
-    if token then
-      self.store.cfg_set("token@" .. self.api:base(), token)
-      local me = self.api:me()
-      self.ui:log("Signed in as " .. me.display_name .. " (" .. me.email .. ")")
-      return me
-    elseif why ~= "authorization_pending" then
-      fail(why == "access_denied" and "Sign-in was denied." or ("Sign-in failed: " .. tostring(why)))
-    end
+  -- While we wait, show it (with Cancel). Inside a sync the sync's own progress window is reused.
+  local standalone = self._tracker == nil
+  if standalone then cancel.reset() end
+  if self.ui.progress then
+    self.ui:progress({ label = "Waiting for you to sign in in your browser...", fraction = nil,
+                       detail = "Code " .. d.user_code .. "   (Cancel to stop waiting)" })
   end
-  fail("Sign-in timed out.")
+  local ok, result = pcall(function()
+    local deadline = async.clock() + d.expires_in
+    while async.clock() < deadline do
+      local next_poll = async.clock() + (d.interval or 3)
+      while async.clock() < next_poll do     -- short steps, so Cancel is noticed straight away
+        cancel.check()
+        async.sleep(0.25)
+      end
+      cancel.check()
+      local token, why = self.api:device_poll(d.device_code)
+      if token then
+        self.store.cfg_set("token@" .. self.api:base(), token)
+        local me = self.api:me()
+        self.ui:log("Signed in as " .. me.display_name .. " (" .. me.email .. ")")
+        return me
+      elseif why ~= "authorization_pending" then
+        fail(why == "access_denied" and "Sign-in was denied." or ("Sign-in failed: " .. tostring(why)))
+      end
+    end
+    fail("Sign-in timed out (nobody approved it in the browser).")
+  end)
+  if standalone and self.ui.progress_end then self.ui:progress_end() end
+  if not ok then error(result, 0) end
+  return result
 end
 
 function Engine:has_token() return self.store.cfg_get("token@" .. self.api:base()) ~= nil end
@@ -712,6 +730,7 @@ function Engine:sync(opts)
   self._tracker = progress.new(self.ui)
   local ok, result = pcall(self._sync, self, opts)
   self._tracker:finish()
+  self._tracker = nil
   if not ok then error(result, 0) end
   return result
 end

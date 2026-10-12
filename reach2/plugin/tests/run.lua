@@ -545,6 +545,28 @@ test("login opens the browser at *our* server, not the host the server reports",
   eq(st.cfg_get("token@https://quake.example.com"), "tok")
 end)
 
+test("an unfinished login can be cancelled, and shows that it is waiting", function()
+  local stub = { base = function() return "https://quake.example.com" end,
+                 device_start = function() return { device_code = "d", user_code = "WXYZ-2345", expires_in = 600,
+                   interval = 1, verification_url = "x", verification_url_complete = "x" } end,
+                 device_poll = function() return nil, "authorization_pending" end }
+  local ui = ui_mod.headless({})
+  local e = engine_mod.new({ api = stub, store = store_mod.memory(ROOT .. "/stuck"), ui = ui, tracks = {}, media = {},
+                             new_guid = FT.guid })
+  local t0 = os.time()
+  local ok, err = pcall(function()
+    return async.run(function()
+      async.spawn(function() async.sleep(2) cancel.request() end)   -- the user presses Cancel
+      return e:login()
+    end)
+  end)
+  cancel.reset()
+  truthy(not ok and tostring(err):find("Cancelled", 1, true), tostring(err))
+  truthy(os.time() - t0 < 10, "stopped promptly, not after the 10-minute sign-in window")
+  truthy(ui.progress_log[1] and ui.progress_log[1].detail:find("WXYZ-2345", 1, true), "progress shows the code")
+  eq(ui.progress_ended, 1, "and is closed afterwards")
+end)
+
 test("login (device flow via dev-login) + whoami", function()
   alice = machine("alice")
   alice:run(function() alice.eng:login() end)

@@ -205,6 +205,42 @@ local ok, err = xpcall(function()
     "unlinked project: sync greyed out, share available: " .. unlinked)
   A.menu_choice = nil
 
+  -- an unfinished login no longer locks Reach: another action can stop it, and a dead lock frees itself
+  do
+    local S = world("stuck")
+    S.browser = function() end                                  -- the user never approves in the browser
+    _G.reaper, _G.gfx = S.R, S.gfx
+    local function pump_for(seconds)
+      local stop = os.time() + seconds
+      while os.time() < stop and #S.deferred > 0 do
+        local batch = S.deferred
+        S.deferred = {}
+        for _, f in ipairs(batch) do f() end
+        os.execute("sleep 0.05")
+      end
+    end
+    actions.login(PLUGIN)
+    pump_for(2)
+    check(S.ext["Reach/busy"] ~= nil and S.ext["Reach/busy"]:find("Log in", 1, true), "login is running (heartbeat)")
+    S.mb = {}
+    actions.list_songs(PLUGIN)                                   -- another action meanwhile; the dialog answers YES
+    check(S.mb[1] and S.mb[1].msg:find("still running: Log in", 1, true), "asked whether to stop it")
+    S.pump()
+    check(S.ext["Reach/busy"] == nil, "lock released")
+    local calm = false
+    for _, m in ipairs(S.mb) do if m.msg:find("Log in cancelled", 1, true) then calm = true end end
+    check(calm, "the login reports it was cancelled")
+    -- a lock left by a script REAPER killed (no heartbeat) doesn't block anything
+    S.ext["Reach/busy"] = ("%.3f|%s"):format(S.R.time_precise() - 60, "Sync")
+    S.mb = {}
+    _G.reaper, _G.gfx = S.R, S.gfx
+    actions.settings(PLUGIN)
+    S.pump()
+    local blocked = false
+    for _, m in ipairs(S.mb) do if m.msg:find("still running", 1, true) then blocked = true end end
+    check(not blocked, "a stale lock is ignored")
+  end
+
   -- a cancelled operation is reported calmly, not as a failure
   A.mb = {}
   _G.reaper, _G.gfx = A.R, A.gfx
