@@ -76,3 +76,16 @@ def test_list_shows_join_code_only_to_owner(alice, bob, joined):
     assert [p["join_code"] for p in mine] == [joined["join_code"]]
     theirs = bob.get("/projects").json()
     assert len(theirs) == 1 and theirs[0]["role"] == "editor" and "join_code" not in theirs[0]
+
+
+def test_song_settings_owner_only_with_revisions(alice, bob, joined):
+    pid = joined["id"]
+    assert bob.get(f"/projects/{pid}/settings").json() == {"rev": 0, "data": None}
+    tempo = {"tempo": {"bpm": 100, "num": 4, "den": 4, "markers": []}}
+    assert bob.put(f"/projects/{pid}/settings", json={"base_rev": 0, "data": tempo}).status_code == 403
+    r = alice.put(f"/projects/{pid}/settings", json={"base_rev": 0, "data": tempo})
+    assert r.json() == {"rev": 1, "data": tempo}
+    assert bob.get(f"/projects/{pid}/settings").json()["data"] == tempo
+    stale = alice.put(f"/projects/{pid}/settings", json={"base_rev": 0, "data": {"tempo": {"bpm": 90}}})
+    assert stale.status_code == 409 and stale.json()["detail"]["rev"] == 1
+    assert alice.put(f"/projects/{pid}/settings", json={"base_rev": 1, "data": {"x": "y" * 70000}}).status_code == 413

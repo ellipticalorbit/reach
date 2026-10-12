@@ -18,6 +18,7 @@ or have REAPER's action list import the `Reach_*.lua` files:
 | `Reach_Add_selected_tracks_to_my_folder.lua` | Moves selected tracks into your Reach folder |
 | `Reach_Sync_LQ.lua` | Pull, resolve conflicts, push. Audio travels as small Ogg Vorbis (quality 5) |
 | `Reach_Sync_HQ.lua` | The same, and also uploads your lossless originals and downloads other people's where they exist |
+| `Reach_Change_Server.lua` | Move this project to another server address. Same server under a new address: just switches. A different server: (after asking) creates the song there and uploads everything; new join code |
 | `Reach_Restore_deleted_tracks.lua` | Bring back a track deleted by anyone |
 
 Needs the SWS extension for large tracks, the clipboard and opening the browser (falls back gracefully
@@ -32,6 +33,23 @@ at once, removes any partial file, and ends the sync at the next safe point. Not
 carries on, because finished uploads/downloads are never repeated and the server ignores partial uploads.
 Transfers have **no total time limit**: they are aborted only if they stall (under 1 KB/s for two
 minutes) and are retried automatically on transient failures. Ordinary API calls are limited to 2 minutes.
+
+## Tempo
+The song's tempo map (tempo, time signature, tempo/time-signature markers) is song-level data on the server and
+**only the owner can change it**: the owner's sync publishes their tempo; anyone else's local tempo change is put
+back (with a message). Sync applies the song tempo before anything else.
+
+REAPER stores item positions in seconds and retimes items itself when the tempo changes, so tracks are synced in a
+tempo-independent *musical* form: items whose timebase is "beats (position, length, rate)" carry their position
+and length in quarter notes and their playrate as *rate per BPM* (which is exactly "the tempo the audio was
+recorded at": e.g. 1/120 for audio recorded at 120 BPM); "beats (position only)" items carry their position in
+quarter notes; "time" items keep seconds. Beat-locked automation points are converted the same way. Each machine
+turns this back into seconds and playrates with the song tempo, so a tempo change never makes tracks look
+modified and every REAPER retimes identically, in whatever order changes arrive.
+
+Not covered yet: fades, take envelopes and automation items are left in seconds; tempo ramps / mid-item tempo
+changes use the tempo at the item's start; the project timebase is read from the saved project file, and
+collaborators should use the same project timebase setting as the owner.
 
 ## How it works
 * Each person gets a top-level **Reach folder** (a folder track named after them). Everything inside a Reach

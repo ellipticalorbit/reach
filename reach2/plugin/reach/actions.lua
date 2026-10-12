@@ -78,6 +78,11 @@ local function report(ui, s)
     s.pulled, s.pushed, s.deleted_remote, s.removed_here))
   local notes = {}
   if s.adopted and s.adopted > 0 then notes[#notes + 1] = s.adopted .. " track(s) moved into your Reach folder." end
+  if s.tempo_pushed then ui:log("Song tempo published.") end
+  if s.tempo_pulled then ui:log("Song tempo updated from the server.") end
+  if s.tempo_reverted then
+    notes[#notes + 1] = "Only the song's owner can change the tempo, so your tempo change was undone."
+  end
   if (s.hq_uploaded or 0) > 0 or (s.hq_downloaded or 0) > 0 then
     ui:log(string.format("High quality: %d uploaded, %d downloaded.", s.hq_uploaded, s.hq_downloaded))
   end
@@ -171,6 +176,32 @@ function actions.list_songs(dir)
   end)
 end
 
+function actions.change_server(dir)
+  run(dir, "Change server", function(engine, ui, store)
+    if not need_saved_project(store) then return end
+    local current = engine:project_server()
+    if not current then
+      ui:info("Reach", "This project isn't linked to a song yet. Set the server in 'Reach: Settings', then Share or Join.")
+      return
+    end
+    local url = ui:prompt("Change server (this project uses " .. current .. ")", "New server URL",
+      store.cfg_get("server_url") or current)
+    if not url or url == "" then return end
+    url = require("reach.api").normalise_url(url)
+    local r = engine:change_server(url)
+    store.save_project()
+    local notes = report(ui, r.summary)
+    if r.moved == "address" then
+      table.insert(notes, 1, "This project now uses " .. url .. " (same server, new address). Nothing was re-uploaded.")
+    else
+      ui:clipboard(r.join_code)
+      table.insert(notes, 1, "The song was created on " .. url .. " and this project uploaded to it.\n\nNew join code " ..
+        "(copied, and in the project notes):\n\n" .. r.join_code .. "\n\nCollaborators need to join with this code.")
+    end
+    ui:info("Reach: server changed", table.concat(notes, "\n\n"))
+  end)
+end
+
 function actions.add_selected(dir)
   run(dir, "Add tracks", function(engine, ui)
     local n = engine:adopt_selected()
@@ -203,7 +234,16 @@ function actions.settings(dir)
   run(dir, "Settings", function(engine, ui, store)
     local cur = store.cfg_get("server_url") or DEFAULT_SERVER
     local url = ui:prompt("Reach settings", "Server URL", cur)
-    if url and url ~= "" then store.cfg_set("server_url", require("reach.api").normalise_url(url)) end
+    if url and url ~= "" then
+      url = require("reach.api").normalise_url(url)
+      store.cfg_set("server_url", url)
+      -- The open project remembers the address it was shared/joined with, and that wins over this setting.
+      local linked = engine:project_server()
+      if linked and linked ~= url then
+        ui:info("Reach settings", "Saved. New songs will use " .. url .. ".\n\nThis project is still linked to " .. linked ..
+          ". To move it, run 'Reach: Change server'.")
+      end
+    end
     local tb = require("reach.toolbar")
     local previous = tb.take_result(store.tmp_dir())
     if previous then ui:info("Reach: toolbar", "Last time, the toolbar change ended with: " .. previous) end

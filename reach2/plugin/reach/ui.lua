@@ -11,7 +11,11 @@ function ui.reaper()
   -- Returns "mine" | "theirs" | "both"
   function u:resolve_conflict(c)
     local who = c.author or c.owner or "someone"
-    if c.kind == "both_edited" then
+    if c.kind == "tempo" then
+      local r = R.MB("You changed the song tempo here, and it was also changed from another of your computers.\n\n" ..
+        "YES = keep the tempo from THIS computer\nNO = use the other one", "Reach: tempo conflict", 4)
+      return r == 6 and "mine" or "theirs"
+    elseif c.kind == "both_edited" then
       local r = R.MB("Track \"" .. c.name .. "\" was changed here and also by " .. who .. ".\n\n" ..
         "YES  = keep MY version\nNO   = use THEIR version\nCANCEL = keep BOTH (their version, plus a copy of mine)",
         "Reach: conflict", 3)
@@ -77,7 +81,12 @@ function ui.headless(opts)
   local u = { logs = {}, conflicts_seen = {} }
   function u:log(msg) self.logs[#self.logs + 1] = msg if opts.verbose then print("[ui] " .. msg) end end
   function u:info() end
-  function u:confirm() return true end
+  u.confirms = {}
+  function u:confirm(title, msg)
+    self.confirms[#self.confirms + 1] = msg
+    if opts.confirm then return opts.confirm(title, msg) end
+    return true
+  end
   function u:resolve_conflict(c)
     self.conflicts_seen[#self.conflicts_seen + 1] = c
     local v = opts.conflict or "theirs"

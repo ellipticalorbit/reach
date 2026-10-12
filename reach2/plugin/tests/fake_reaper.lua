@@ -109,6 +109,25 @@ local function new_world(root, opts)
   function R.GetResourcePath() return root .. "/resource" end
   function R.GetProjectPath() return root .. "/project" end
   function R.GetProjectName() return W.project_name end
+  W.bpm, W.markers = 120, {}
+  function R.EnumProjects() return 0, "" end
+  function R.GetProjectTimeSignature2() return W.bpm, 4 end
+  function R.TimeMap_GetTimeSigAtTime() return 4, 4, W.bpm end
+  function R.TimeMap2_timeToQN(_, t) return t * W.bpm / 60 end
+  function R.TimeMap2_QNToTime(_, q) return q * 60 / W.bpm end
+  function R.TimeMap2_GetDividedBpmAtTime() return W.bpm end
+  function R.CountTempoTimeSigMarkers() return #W.markers end
+  function R.GetTempoTimeSigMarker(_, i)
+    local m = W.markers[i + 1]
+    return true, 0, m.measure, m.beat, m.bpm, m.num, m.den, m.linear
+  end
+  function R.DeleteTempoTimeSigMarker(_, i) table.remove(W.markers, i + 1) return true end
+  function R.SetTempoTimeSigMarker(_, idx, _, measure, beat, bpm, num, den, linear)
+    W.markers[#W.markers + 1] = { measure = measure, beat = beat, bpm = bpm, num = num, den = den, linear = linear }
+    return true
+  end
+  function R.SetCurrentBPM(_, bpm) W.bpm = bpm end
+  function R.UpdateTimeline() end
   W.project_name, W.commands = "song.rpp", {}
   function R.Main_OnCommand(id)
     W.commands[#W.commands + 1] = id

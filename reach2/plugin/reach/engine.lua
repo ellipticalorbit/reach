@@ -12,6 +12,7 @@ local async = require("reach.async")
 local fs = require("reach.fs")
 local progress = require("reach.progress")
 local cancel = require("reach.cancel")
+local tempo = require("reach.tempo")
 
 local Engine = {}
 Engine.__index = Engine
@@ -28,11 +29,119 @@ function engine.new(env)
 end
 
 local function fail(msg) error({ msg = msg, user = true }, 0) end
+
+local function new_state(server, project)
+  return { server = server, project_id = project.id, name = project.name, join_code = project.join_code,
+           seq = 0, base = {} }
+end
 engine.fail = fail
 
 ---------------------------------------------------------------------------------------------------
 -- Login / link
 ---------------------------------------------------------------------------------------------------
+
+-- The server address this project is linked to, if any (it is recorded in the .rpp when you share/join).
+function Engine:project_server()
+  local st = self.store.project_load()
+  return st and st.project_id and st.server or nil
+end
+
+-- Point this project at a new address for the SAME server (e.g. http://host:8000 -> https://host). The song,
+-- tracks and sync state stay as they are; only the address changes.
+function Engine:set_project_server(url)
+  local st = self.store.project_load()
+  if not (st and st.project_id) then return false end
+  st.server = url
+  self.store.project_save(st)
+  return true
+end
+
+-- Move this project to another server address (Reach: Change server). Two cases:
+--   * the new address already has this song (the same server under a new name, e.g. http://host:8000 ->
+--     https://host): only the address changes, then a normal sync;
+--   * it doesn't (a different server): after confirmation the song is created there and the whole project is
+--     uploaded, as if shared for the first time. Audio we only hold as a WAV companion is fetched (as its Ogg)
+--     from the old server first, so nothing is missing on the new one.
+-- Until the copy is committed, any failure leaves the project on its old address.
+-- Returns { moved = "address" | "copied", join_code = (copied only), summary = sync summary }.
+function Engine:change_server(new_url)
+  local st = self.store.project_load()
+  if not (st and st.project_id) then
+    fail("This project isn't linked to a Reach song yet. Set the server in Reach Settings, then Share or Join.")
+  end
+  local old_url = st.server
+  if old_url == new_url then fail("This project already uses " .. new_url .. ".") end
+  local original = self.store.project_load()
+  st.server = new_url
+  self.store.project_save(st)
+
+  local committed = false
+  local ok, result = pcall(function()
+    self:ensure_login()
+    local _, status = self.api:call("GET", "/projects/" .. st.project_id, nil, { ok = { [404] = true } })
+    if status == 200 then
+      self.ui:log("The song is already on " .. new_url .. " (same server, new address).")
+      return { moved = "address", summary = self:sync() }
+    end
+    if not self.ui:confirm("Reach: change server",
+        "The song \"" .. (st.name or "?") .. "\" isn't on " .. new_url .. " (or your account there isn't a member).\n\n" ..
+        "Create it there and upload this project's tracks and audio?\n\n" ..
+        "It becomes a new song with a new join code, owned by you; collaborators need to join it again. " ..
+        "The copy on " .. tostring(old_url) .. " is left as it is.") then
+      fail("Server not changed.")
+    end
+    self:fetch_missing_oggs(old_url, st.project_id)
+    local me = self.api:me()                                   -- my account on the NEW server
+    if st.me and st.me ~= me.id and self.tracks.retag_owner then self.tracks:retag_owner(st.me, me) end
+    local p = self.api:create_project(st.name or "Song")
+    local fresh = new_state(new_url, p)
+    fresh.ignored = st.ignored
+    self.store.project_save(fresh)
+    self.store.update_notes(NOTES_PREFIX, p.join_code)
+    committed = true
+    self.ui:log("Created \"" .. p.name .. "\" on " .. new_url .. ". Uploading the project...")
+    return { moved = "copied", join_code = p.join_code, summary = self:sync() }
+  end)
+  if not ok then
+    if not committed then self.store.project_save(original) end
+    error(result, 0)
+  end
+  return result
+end
+
+-- Every Ogg the local tracks reference must be on disk before uploading them somewhere new. Tracks played from
+-- a downloaded WAV companion may not have their Ogg locally: fetch those from the old server.
+function Engine:fetch_missing_oggs(old_url, old_pid)
+  local missing, seen = {}, {}
+  for _, t in ipairs(self.tracks:snapshot()) do
+    for _, p in ipairs(canon.file_refs(t.chunk)) do
+      local ref = self.media:ref_for_local(p)
+      local sha = ref and ref:match("^reach%-media://(%x+)%.ogg$")
+      if sha and not seen[sha] and not fs.exists(self.media:path_for(sha)) then
+        seen[sha] = true
+        missing[#missing + 1] = sha
+      end
+    end
+  end
+  if #missing == 0 then return end
+  local old_api = require("reach.api").new({ base_url = old_url,
+    token = function() return self.store.cfg_get("token@" .. require("reach.api").normalise_url(old_url or "")) end })
+  local failed = 0
+  local items = {}
+  for i, sha in ipairs(missing) do items[i] = { sha = sha, size = 0 } end
+  self._tracker = progress.new(self.ui)                     -- not inside a sync, so give it its own window
+  local ok, err = pcall(self.run_transfers, self, "Fetching audio from the old server", items, function(it, on_progress)
+    local dest = self.media:path_for(it.sha)
+    local got = pcall(function() old_api:get_blob(old_pid, it.sha, dest .. ".part", on_progress) end)
+    if got then fs.rename(dest .. ".part", dest) else failed = failed + 1 end
+  end)
+  self._tracker:finish()
+  if not ok then error(err, 0) end
+  if failed > 0 then
+    fail(failed .. " audio file(s) are only on the old server (" .. tostring(old_url) .. ") and couldn't be fetched. " ..
+      "Make sure it is reachable and that you've synced with it from this computer, then try again.")
+  end
+end
 
 function Engine:server_url()
   local st = self.store.project_load()
@@ -70,10 +179,6 @@ function Engine:ensure_login()
   if not self:has_token() then self:login() end
 end
 
-local function new_state(server, project)
-  return { server = server, project_id = project.id, name = project.name, join_code = project.join_code,
-           seq = 0, base = {} }
-end
 
 -- Create the song on the server and link this project to it. Returns the join code.
 function Engine:share(name)
@@ -152,18 +257,29 @@ end
 -- Helpers
 ---------------------------------------------------------------------------------------------------
 
--- Fingerprint form: cached media (Ogg or its WAV companion) collapses to the one canonical Ogg reference, and
--- the source type is normalised, so a track looks identical whether it points at the Ogg or at the WAV.
+-- Tempo context for the musical form (nil if the project adapter can't provide a tempo map).
+function Engine:tempo_ctx()
+  if not self.tracks.tempo_map then return nil end
+  local tb = self.tracks:timebase()
+  return { map = self.tracks:tempo_map(), items = tb.items, env = tb.env }
+end
+
+-- Fingerprint form: cached media (Ogg or its WAV companion) collapses to the one canonical Ogg reference, the
+-- source type is normalised (a track looks identical whether it points at the Ogg or at the WAV), and timing is
+-- musical, so a tempo change doesn't make tracks look modified.
 function Engine:canonical(chunk)
   local mapped = canon.map_files(chunk, function(path)
     local ref = self.media:ref_for_local(path)
     if ref then return ref, "VORBIS" end
   end)
-  return canon.strip_volatile(mapped)
+  return canon.strip_volatile(tempo.musicalize(mapped, self:tempo_ctx()))
 end
 
--- Server chunk -> chunk with local media paths. Uses the high-quality WAV where we have it, else the Ogg.
+-- Server chunk -> chunk with local media paths (the high-quality WAV where we have it, else the Ogg) and
+-- seconds computed from our tempo map.
 function Engine:localize(chunk)
+  local ctx = self:tempo_ctx()
+  if ctx then chunk = tempo.localize(chunk, ctx.map) end
   return canon.map_files(chunk, function(path)
     local sha = path:match("^reach%-media://(%x+)%.ogg$")
     if not sha then return nil end
@@ -217,6 +333,59 @@ function Engine:download_audio(pid, shas, variants, summary)
       self.media:ensure_local(it.sha, on_progress)
     end
   end)
+end
+
+-- Song tempo. Only the owner may change it: the owner's local tempo is published; anyone else's local change is
+-- put back to the song's tempo (REAPER then retimes their items back, which the musical form makes invisible).
+function Engine:sync_settings(st, pid, summary)
+  if not (self.tracks.read_tempo and self.tracks.write_tempo) then return end
+  local role = self.api:project(pid).role
+  local ok, remote = pcall(self.api.get_settings, self.api, pid)
+  if not ok then
+    if type(remote) == "table" and remote.code == 404 then return end   -- older server without song settings
+    error(remote, 0)
+  end
+  local function local_fp() return tempo.settings_fp({ tempo = self.tracks:read_tempo() }) end
+  local mine = local_fp()
+  local changed_here = st.settings_fp ~= nil and mine ~= st.settings_fp
+  local remote_newer = remote.rev > (st.settings_rev or 0)
+
+  local function apply(r)
+    if r.data and r.data.tempo then self.tracks:write_tempo(r.data.tempo) end
+    st.settings_rev, st.settings_fp = r.rev, local_fp()
+  end
+  local function publish(base)
+    local res, current = self.api:put_settings(pid, base, { tempo = self.tracks:read_tempo() })
+    if not res then return false, current end
+    st.settings_rev, st.settings_fp = res.rev, mine
+    summary.tempo_pushed = true
+    return true
+  end
+
+  if role == "owner" then
+    if remote_newer and changed_here then        -- the owner changed it on two machines
+      local choice = self.ui:resolve_conflict({ kind = "tempo", name = "Song tempo" })
+      if choice == "theirs" then apply(remote) summary.tempo_pulled = true else publish(remote.rev) end
+    elseif remote_newer then
+      apply(remote)
+      summary.tempo_pulled = true
+    elseif changed_here or remote.rev == 0 or st.settings_fp == nil then
+      if mine ~= tempo.settings_fp(remote.data) then
+        local ok, current = publish(remote.rev)
+        if not ok then apply(current) summary.tempo_pulled = true end
+      else
+        st.settings_rev, st.settings_fp = remote.rev, mine
+      end
+    end
+  elseif remote.rev > 0 then
+    if remote_newer then
+      apply(remote)
+      summary.tempo_pulled = true
+    elseif changed_here then                    -- not the owner: put the song's tempo back
+      apply(remote)
+      summary.tempo_reverted = true
+    end
+  end
 end
 
 -- HQ sync, local side: audio we already have as an Ogg may have a WAV companion on the server now. Fetch those
@@ -425,6 +594,8 @@ function Engine:_sync(opts)
   ui:log("Syncing with the server...")
   self._tracker:phase("Contacting the server")
   local me = api:me()
+  st.me = me.id                    -- remembered so a later server move can re-tag my folder
+  self:sync_settings(st, pid, summary)   -- tempo first, so everything below uses the song's tempo map
   local feed = api:changes(pid, st.seq)
   local locals = self:scan(st, feed.tracks)
 
@@ -629,7 +800,7 @@ function Engine:_sync(opts)
         if ref then return ref, "VORBIS" end
         return "reach-media://" .. sha_of[path] .. ".ogg", "VORBIS"
       end)
-      upload = canon.strip_volatile(upload)
+      upload = canon.strip_volatile(tempo.musicalize(upload, self:tempo_ctx()))
       local bad_chunk = canon.problem(upload, l.guid)
       if bad_chunk then
         ui:log("Skipping \"" .. l.name .. "\": " .. bad_chunk)

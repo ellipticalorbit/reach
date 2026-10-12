@@ -74,6 +74,17 @@ function Api:me() return self:call("GET", "/me") end
 function Api:create_project(name) return self:call("POST", "/projects", { name = name }) end
 function Api:join(code) return self:call("POST", "/join", { code = code }) end
 function Api:projects() return self:call("GET", "/projects") end
+-- Song settings (tempo map). Returns { rev, data }.
+function Api:get_settings(id) return self:call("GET", "/projects/" .. id .. "/settings") end
+
+-- Owner only. Returns { rev, data } or nil, current { rev, data } when base_rev is stale.
+function Api:put_settings(id, base_rev, data)
+  local res, status = self:call("PUT", "/projects/" .. id .. "/settings", { base_rev = base_rev, data = data },
+    { ok = { [409] = true } })
+  if status == 409 then return nil, res.detail end
+  return res
+end
+
 function Api:project(id) return self:call("GET", "/projects/" .. id) end
 function Api:changes(id, since) return self:call("GET", "/projects/" .. id .. "/changes?since=" .. (since or 0)) end
 function Api:tracks(id, state) return self:call("GET", "/projects/" .. id .. "/tracks?state=" .. (state or "live")) end

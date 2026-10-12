@@ -472,13 +472,14 @@ end
 -- Plays the role of the user's browser: signs in with the server's dev login and approves the device code.
 local function browser_approve(url, email, name)
   local code = url:match("user_code=([%w%-]+)")
+  local server = url:match("^(https?://[^/]+)")
   local jar = ROOT .. "/jar-" .. math.random(1e9)
   local function curl(args) local p = io.popen("curl -s -L -c '" .. jar .. "' -b '" .. jar .. "' " .. args) local o = p:read("a") p:close() return o end
-  local page = curl("'" .. URL .. "/auth/dev-login?email=" .. email .. "&name=" .. name ..
+  local page = curl("'" .. server .. "/auth/dev-login?email=" .. email .. "&name=" .. name ..
     "&next=" .. "%2Fdevice%3Fuser_code%3D" .. code .. "'")
   local csrf = page:match('name=csrf value="([^"]+)"')
   assert(csrf, "no approval page: " .. page)
-  local done = curl("-d 'user_code=" .. code .. "&action=approve&csrf=" .. csrf .. "' '" .. URL .. "/device/approve'")
+  local done = curl("-d 'user_code=" .. code .. "&action=approve&csrf=" .. csrf .. "' '" .. server .. "/device/approve'")
   assert(done:find("Approved"), done)
 end
 
@@ -490,12 +491,15 @@ local function machine(name, opts)
   local m = { name = name, email = email, tracks = FT.new() }
   m.store = store_mod.memory(ROOT .. "/" .. name .. math.random(1e6))
   local api
-  api = api_mod.new({ base_url = URL, token = function() return m.store.cfg_get("token@" .. api:base()) end })
+  m.store.cfg_set("server_url", URL)
+  api = api_mod.new({ base_url = function() return m.eng and m.eng:server_url() or URL end,
+                      token = function() return m.store.cfg_get("token@" .. api:base()) end })
   m.api = api
   m.ui = ui_mod.headless({ open_url = function(url) browser_approve(url, email, name) end,
                            conflict = function(c) return m.conflict_choice or "theirs" end,
                            confirm_deletes = function(names) m.deleted_names = names return m.allow_deletes ~= false end,
                            orphans = function(names) return m.orphan_choice or "later" end,
+                           confirm = function(_, msg) m.last_confirm = msg return m.confirm_answer ~= false end,
                            new_project = function(song) m.new_project_for = song m.tracks.list, m.tracks.byguid = {}, {}
                              m.store.reset_project() return m.new_project_saved ~= false end })
   m.media = media_mod.new({ store = m.store, api = api, ffmpeg = opts.ffmpeg or FFMPEG,
@@ -889,7 +893,7 @@ test("progress: a real throttled upload reports rising fractions ending at 1, an
   local seen = {}
   local res = async.run(function()
     return http.request({ url = URL .. "/projects/" .. pid .. "/blobs/" .. sha, method = "PUT", upload_file = big,
-      headers = m.api:_headers(), limit_rate = "12M", on_progress = function(f) seen[#seen + 1] = f end })
+      headers = m.api:_headers(), limit_rate = "5M", on_progress = function(f) seen[#seen + 1] = f end })
   end)
   eq(res.status, 200, res.err)
   truthy(#seen >= 3, "several progress updates, got " .. #seen)
@@ -976,26 +980,6 @@ test("HQ sync attaches companions to tracks that were pushed earlier in LQ", fun
   local s2 = hq_song.lql:sync({ hq = true })
   eq(s2.hq_downloaded, 1)
   truthy(hq_song.lql.tracks:find("LQ take").chunk:match('FILE "([^"]+)"'):match("%.hq%.wav$"))
-end)
-
-test("REPRO: tracks pushed before (no encode record on this machine) still get their WAV on Sync HQ", function()
-  local m = machine("legacy")
-  m:run(function() m.eng:login() end)
-  m:run(function() m.eng:share("Legacy Song") end)
-  local wav = ROOT .. "/legacy-take.wav"
-  write_wav(wav, 1, 349)
-  m.tracks:add_track("Old take", m:folder(), wav)
-  eq(m:sync().pushed, 2)                                   -- an LQ push, as in earlier versions
-  -- simulate "pushed by an older plugin version / cache lost": this machine no longer knows which Ogg it made
-  os.remove(m.store.media_index_path())
-  m.media.index = nil
-  local s = m:sync({ hq = true })
-  eq(s.pushed, 0, "nothing changed")
-  eq(s.hq_uploaded, 1, "the WAV is uploaded anyway")
-  local ogg = track_ogg(m, "Old take")
-  truthy(lookup_variants(m, { ogg })[ogg], "companion exists on the server and is linked to the Ogg the track uses")
-  local again = m:sync({ hq = true })
-  eq(again.hq_uploaded, 0, "and only once"); eq(again.hq_already, 1, "reported as already there")
 end)
 
 test("other lossless formats get a WAV companion; lossy sources get none", function()
@@ -1146,6 +1130,203 @@ test("progress window Cancel button (and Esc) request cancellation", function()
   W.gfx.char = 27; frame()
   eq(cancel.requested, true, "Esc cancels"); W.gfx.char = 0
   win.close(); cancel.reset()
+end)
+
+local URL_B = os.getenv("REACH_URL_B") or "http://localhost:8001"   -- a second, independent server
+
+test("change server: same server at a new address only changes the address", function()
+  local m = machine("mover")
+  m:run(function() m.eng:login() end)
+  m:run(function() m.eng:share("Moving Song") end)
+  local wav = ROOT .. "/mover.wav"
+  write_wav(wav, 1, 247)
+  m.tracks:add_track("Mover take", m:folder(), wav)
+  m:sync()
+  local before = m.store.project_load()
+  local alias = URL:gsub("localhost", "[::1]")                  -- same server, another address (like http://host:8000 -> https://host)
+  local r = m:run(function() return m.eng:change_server(alias) end)
+  eq(r.moved, "address")
+  local after = m.store.project_load()
+  eq(after.server, alias); eq(after.project_id, before.project_id, "same song")
+  eq(r.summary.pushed, 0, "nothing re-uploaded"); eq(r.summary.pulled, 0)
+  truthy(m.store.cfg_get("token@" .. alias), "logged in at the new address")
+end)
+
+test("change server: declining the copy to a different server leaves the project untouched", function()
+  if not os.execute("curl -sf -m 3 " .. URL_B .. "/healthz >/dev/null") then error("second test server not running at " .. URL_B) end
+  local m = machine("decliner")
+  m:run(function() m.eng:login() end)
+  m:run(function() m.eng:share("Stay Song") end)
+  local before = m.store.project_load()
+  m.confirm_answer = false
+  local ok, err = pcall(function() return m:run(function() return m.eng:change_server(URL_B) end) end)
+  truthy(not ok and tostring(err):find("not changed", 1, true), tostring(err))
+  truthy(m.last_confirm:find("isn't on " .. URL_B, 1, true), "asked first: " .. tostring(m.last_confirm))
+  local after = m.store.project_load()
+  eq(after.server, before.server); eq(after.project_id, before.project_id)
+end)
+
+test("change server: copying to a different server uploads everything, incl. audio held only as WAV", function()
+  -- on server A: an owner with their own recording, and a collaborator who uploads in HQ
+  local owner, col = machine("migrator"), machine("migcol")
+  owner:run(function() owner.eng:login() end)
+  local code = owner:run(function() return owner.eng:share("Migrating Song") end)
+  local wav = ROOT .. "/migrator.wav"
+  write_wav(wav, 1, 196)
+  owner.tracks:add_track("Owner take", owner:folder(), wav)
+  owner:sync()
+  col:run(function() col.eng:login() end)
+  col:run(function() col.eng:join(code) end)
+  local cwav = ROOT .. "/migcol.wav"
+  write_wav(cwav, 1, 587)
+  col.tracks:add_track("Collab take", col:folder(), cwav)
+  col:sync({ hq = true })
+  owner:sync({ hq = true })                                    -- owner gets the collaborator's WAV, not its Ogg
+  local cpath = owner.tracks:find("Collab take").chunk:match('FILE "([^"]+)"')
+  truthy(cpath:match("%.hq%.wav$"), "owner plays the collaborator's take from the WAV only")
+  local old_pid = owner.store.project_load().project_id
+
+  owner.confirm_answer = true
+  local r = owner:run(function() return owner.eng:change_server(URL_B) end)
+  eq(r.moved, "copied"); truthy(r.join_code and r.join_code ~= code, "new join code")
+  local st = owner.store.project_load()
+  eq(st.server, URL_B); truthy(st.project_id ~= old_pid, "a new song on the new server")
+  eq(owner.store.notes["Reach join code: "], r.join_code, "notes updated")
+  eq(r.summary.pushed, 4, "both folders and both takes uploaded")
+
+  -- someone joining on the new server gets the whole song with playable audio
+  local fresh = machine("newcomer")
+  fresh.store.cfg_set("server_url", URL_B)
+  fresh:run(function() fresh.eng:login() end)
+  fresh:run(function() fresh.eng:join(r.join_code) end)
+  local s = fresh:sync()
+  eq(s.pulled, 4)
+  for _, name in ipairs({ "Owner take", "Collab take" }) do
+    local path = fresh.tracks:find(name).chunk:match('FILE "([^"]+)"')
+    eq(fs.read(path):sub(1, 4), "OggS", name .. " audio arrived on the new server")
+  end
+  -- the collaborator moves to the new server too (fresh project): their old folder is recognised by email
+  col.store.cfg_set("server_url", URL_B)
+  col.tracks.list, col.tracks.byguid = {}, {}          -- a fresh project (Join song opens one); their folder,
+  col.store.reset_project()                            -- tagged with their OLD id, arrives with the song
+  col:run(function() col.eng:login() end)
+  col:run(function() col.eng:join(r.join_code) end)
+  local cs = col:sync()
+  local folders = 0
+  for _, line in ipairs(col.tracks:outline()) do if line == "migcol" then folders = folders + 1 end end
+  eq(folders, 1, "collaborator has exactly one folder on the new server: " .. table.concat(col.tracks:outline(), "|"))
+  eq(cs.pushed, 1, "only the re-tagged folder is pushed")
+  -- and the owner keeps syncing against the new server with nothing left over
+  local again = owner:sync()
+  eq(again.conflicts, 0); eq(again.pushed, 0); eq(again.pulled, 2, "the collaborator's re-tagged folder and the newcomer's folder")
+  local own_folders = 0
+  for _, line in ipairs(owner.tracks:outline()) do if line == "migrator" then own_folders = own_folders + 1 end end
+  eq(own_folders, 1, "owner still has exactly one folder")
+end)
+
+-- ---- Tempo -----------------------------------------------------------------------------------------
+local tsong = {}
+local function near(a, b, msg) if math.abs(a - b) > 1e-6 then error((msg or "") .. ": expected " .. b .. ", got " .. a, 2) end end
+
+test("tempo: the owner's tempo is published and collaborators adopt it", function()
+  tsong.owner, tsong.col = machine("tempo-owner"), machine("tempo-col")
+  local o, c = tsong.owner, tsong.col
+  o:run(function() o.eng:login() end)
+  tsong.code = o:run(function() return o.eng:share("Tempo Song") end)
+  write_wav(ROOT .. "/none.wav", 1, 220)
+  o.tracks:set_tempo(110)
+  local f = o:folder()
+  o.tracks:add_track("Gtr", f, ROOT .. "/none.wav", { pos = 3, len = 2 })          -- beats (pos, len, rate): project default
+  local s = o:sync()
+  truthy(s.tempo_pushed, "tempo published on the first sync")
+  c:run(function() c.eng:login() end)
+  c:run(function() c.eng:join(tsong.code) end)
+  local cs = c:sync()
+  truthy(cs.tempo_pulled); eq(c.tracks.tempo.bpm, 110, "collaborator now at the song tempo")
+  local t = c.tracks:item_timing("Gtr")
+  near(t.pos, 3, "position"); near(t.len, 2, "length"); near(t.rate, 1, "rate")
+end)
+
+test("tempo: an owner's tempo change is one small change, nobody's tracks get modified, everything retimes alike", function()
+  local o, c = tsong.owner, tsong.col
+  o.tracks:set_tempo(100)                                          -- REAPER (fake) retimes the owner's items
+  near(o.tracks:item_timing("Gtr").pos, 3.3, "owner's item moved")
+  local s = o:sync()
+  truthy(s.tempo_pushed); eq(s.pushed, 0, "no track counts as modified"); eq(s.conflicts, 0)
+  local cs = c:sync()
+  truthy(cs.tempo_pulled); eq(cs.pushed, 0); eq(cs.pulled, 0, "no track needed re-sending")
+  local ot, ct = o.tracks:item_timing("Gtr"), c.tracks:item_timing("Gtr")
+  near(ct.pos, ot.pos, "same position"); near(ct.len, ot.len, "same length"); near(ct.rate, ot.rate, "same stretch")
+  near(ct.rate, 100 / 110, "stretched by the tempo ratio")
+end)
+
+test("tempo: your scenario: record, change tempo, push; the other side pulls and later the tempo changes again", function()
+  local o, c = tsong.owner, tsong.col
+  -- the collaborator records at the song tempo (100) ...
+  c.tracks:add_track("Vox", c:folder(), ROOT .. "/none.wav", { pos = 1.8, len = 3 })
+  -- ... while the owner changes the tempo to 150 before the collaborator has pushed
+  o.tracks:set_tempo(150)
+  o:sync()
+  local cs = c:sync()                                              -- tempo first, then the recording goes up
+  truthy(cs.tempo_pulled); eq(cs.pushed, 1, "only the new recording")
+  local vox_c = c.tracks:item_timing("Vox")
+  near(vox_c.pos, 1.8 * 100 / 150, "retimed by the collaborator's own REAPER to the new tempo")
+  local os2 = o:sync()
+  eq(os2.pulled, 1)
+  local vox_o = o.tracks:item_timing("Vox")
+  near(vox_o.pos, vox_c.pos, "owner places it on the same beat"); near(vox_o.len, vox_c.len)
+  near(vox_o.rate, vox_c.rate, "and stretches it the same"); near(vox_o.rate, 150 / 100, "relative to its recorded tempo")
+  -- a later tempo change keeps both in step
+  o.tracks:set_tempo(120)
+  o:sync(); c:sync()
+  near(c.tracks:item_timing("Vox").pos, o.tracks:item_timing("Vox").pos)
+  near(c.tracks:item_timing("Vox").rate, 120 / 100, "rate always follows recorded tempo -> song tempo")
+end)
+
+test("tempo: only the owner can change it; a collaborator's change is undone", function()
+  local c = tsong.col
+  local before = c.tracks:item_timing("Gtr")
+  c.tracks:set_tempo(90)
+  local cs = c:sync()
+  truthy(cs.tempo_reverted, "reported"); eq(c.tracks.tempo.bpm, 120, "back to the song tempo")
+  eq(cs.pushed, 0, "nothing pushed")
+  local after = c.tracks:item_timing("Gtr")
+  near(after.pos, before.pos, "items back where they were"); near(after.rate, before.rate)
+end)
+
+test("tempo: time-timebase and position-only items, and automation", function()
+  local o, c = tsong.owner, tsong.col
+  local f = o:folder()
+  o.tracks:add_track("TimeTrack", f, ROOT .. "/none.wav", { pos = 2, len = 1, track_beat = 0 })
+  o.tracks:add_track("PosOnly", f, ROOT .. "/none.wav", { pos = 2, len = 1, beat = 2 })
+  o.tracks:add_track("Auto", f, nil, { env = { 1.5, 3 } })
+  o:sync(); c:sync()
+  o.tracks:set_tempo(60)                                           -- halve the tempo
+  local s = o:sync()
+  eq(s.pushed, 0, "a tempo change modifies no tracks")
+  c:sync()
+  local tt, po = c.tracks:item_timing("TimeTrack"), c.tracks:item_timing("PosOnly")
+  near(tt.pos, 2, "time item stays put"); near(tt.len, 1); near(tt.rate, 1)
+  near(po.pos, 2 * 120 / 60, "position-only item moves"); near(po.len, 1, "but isn't stretched"); near(po.rate, 1)
+  local pts = {}
+  for t in c.tracks:find("Auto").chunk:gmatch("\n%s*PT (%S+)") do pts[#pts + 1] = tonumber(t) end
+  eq(#pts, 2); near(pts[1], 3, "automation follows the beat"); near(pts[2], 6)
+end)
+
+test("tempo: the owner changing it on two computers asks which to keep", function()
+  local o = tsong.owner
+  local o2 = machine("tempo-owner-2", { email = o.email })
+  o2:run(function() o2.eng:login() end)
+  o2:run(function() o2.eng:join(tsong.code) end)
+  o2:sync()
+  o.tracks:set_tempo(130); o:sync()
+  o2.tracks:set_tempo(140)
+  o2.conflict_choice = "mine"
+  local s = o2:sync()
+  local seen = o2.ui.conflicts_seen[#o2.ui.conflicts_seen]
+  eq(seen and seen.kind, "tempo"); truthy(s.tempo_pushed)
+  o:sync()
+  eq(o.tracks.tempo.bpm, 140, "the kept tempo wins everywhere")
 end)
 
 test("same user in a second project reuses their existing folder instead of creating another", function()

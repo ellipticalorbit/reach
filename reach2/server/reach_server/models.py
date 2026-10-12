@@ -61,6 +61,9 @@ class Project(Base):
     # None = inherit server defaults. Otherwise e.g.
     # {"deleted_track_days": 90, "max_revisions_per_track": 50} (null value = keep forever)
     retention: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Song-level settings shared by everyone (tempo map, time signatures). Only the owner may change them.
+    settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    settings_rev: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Member(Base):

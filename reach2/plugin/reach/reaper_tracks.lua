@@ -1,6 +1,7 @@
 -- Adapter between the sync engine and the REAPER project. Everything that touches REAPER's track API lives
 -- here. "Synced" tracks are those inside a top-level folder track marked with P_EXT:reach_owner.
 local OWNER_KEY = "P_EXT:reach_owner"
+local EMAIL_KEY = "P_EXT:reach_owner_email" -- user ids differ per server; the email doesn't
 
 local Tracks = {}
 Tracks.__index = Tracks
@@ -38,6 +39,12 @@ local function owner_of(tr)
   return nil
 end
 
+local function owner_email_of(tr)
+  local ok, v = reaper.GetSetMediaTrackInfo_String(tr, EMAIL_KEY, "", false)
+  if ok and v ~= "" then return v:lower() end
+  return nil
+end
+
 local function guid_map()
   local map = {}
   for i = 0, reaper.CountTracks(0) - 1 do
@@ -50,6 +57,60 @@ end
 local function index_of(tr) return math.floor(reaper.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER")) - 1 end
 
 function Tracks:new_guid() return reaper.genGuid("") end
+
+-- Tempo map of the current project, as conversions between seconds and quarter notes.
+function Tracks:tempo_map()
+  return { qn = function(t) return reaper.TimeMap2_timeToQN(0, t) end,
+           time = function(q) return reaper.TimeMap2_QNToTime(0, q) end,
+           bpm = function(t) return reaper.TimeMap2_GetDividedBpmAtTime(0, t) end }
+end
+
+-- Project timebase settings (items, envelopes). There's no API for these, so read them from the saved project
+-- file; REAPER's default is beats (1) for both.
+function Tracks:timebase()
+  local tb = { items = 1, env = 1 }
+  local _, path = reaper.EnumProjects(-1, "")
+  local f = path and path ~= "" and io.open(path, "r")
+  if f then
+    local text = f:read("a")
+    f:close()
+    tb.items = tonumber(text:match("\n%s*TIMELOCKMODE (%-?%d+)") or "") or 1
+    tb.env = tonumber(text:match("\n%s*TEMPOENVLOCKMODE (%-?%d+)") or "") or 1
+  end
+  return tb
+end
+
+-- The project's tempo map as plain data: base tempo / time signature and the tempo/time-signature markers.
+-- Markers are kept in musical position (measure, beat) so they mean the same thing on every machine.
+function Tracks:read_tempo()
+  local bpm = reaper.GetProjectTimeSignature2(0)
+  local num, den = reaper.TimeMap_GetTimeSigAtTime(0, 0)
+  local markers = {}
+  for i = 0, reaper.CountTempoTimeSigMarkers(0) - 1 do
+    local _, _, measure, beat, mbpm, mnum, mden, linear = reaper.GetTempoTimeSigMarker(0, i)
+    markers[#markers + 1] = { measure = measure, beat = beat, bpm = mbpm, num = mnum, den = mden, linear = linear }
+  end
+  return { bpm = bpm, num = num, den = den, markers = markers }
+end
+
+-- Replace the project's tempo map. REAPER retimes items according to their timebase as it does for a manual
+-- tempo change.
+function Tracks:write_tempo(t)
+  reaper.Undo_BeginBlock()
+  for i = reaper.CountTempoTimeSigMarkers(0) - 1, 0, -1 do reaper.DeleteTempoTimeSigMarker(0, i) end
+  reaper.SetCurrentBPM(0, t.bpm, false)
+  local has_start = false
+  for _, m in ipairs(t.markers or {}) do if (m.measure or 0) == 0 and (m.beat or 0) == 0 then has_start = true end end
+  local num, den = reaper.TimeMap_GetTimeSigAtTime(0, 0)
+  if not has_start and t.num and (t.num ~= num or t.den ~= den) then
+    reaper.SetTempoTimeSigMarker(0, -1, -1, 0, 0, t.bpm, t.num, t.den, false)
+  end
+  for _, m in ipairs(t.markers or {}) do
+    reaper.SetTempoTimeSigMarker(0, -1, -1, m.measure, m.beat, m.bpm, m.num or 0, m.den or 0, m.linear and true or false)
+  end
+  reaper.UpdateTimeline()
+  reaper.Undo_EndBlock("Reach: song tempo", -1)
+end
 
 -- Ordered list of synced tracks: { guid, chunk, parent (guid or nil) }
 function Tracks:snapshot()
@@ -80,11 +141,20 @@ function Tracks:ensure_folder(me)
     end
   end
   if nested then return nested, false end -- never create a second folder just because it got nested
+  -- Same person, different server (new user id): recognise the folder by email and re-tag it.
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if me.email and owner_email_of(tr) == me.email:lower() and not reaper.GetParentTrack(tr) then
+      reaper.GetSetMediaTrackInfo_String(tr, OWNER_KEY, me.id, true)
+      return reaper.GetTrackGUID(tr), false
+    end
+  end
   local idx = reaper.CountTracks(0)
   reaper.InsertTrackAtIndex(idx, false)
   local tr = reaper.GetTrack(0, idx)
   reaper.GetSetMediaTrackInfo_String(tr, "P_NAME", me.display_name, true)
   reaper.GetSetMediaTrackInfo_String(tr, OWNER_KEY, me.id, true)
+  if me.email then reaper.GetSetMediaTrackInfo_String(tr, EMAIL_KEY, me.email:lower(), true) end
   -- stable per-user colour derived from the id
   local n = 0
   for c in me.id:gmatch("%x") do n = (n * 31 + tonumber(c, 16)) % 360 end
@@ -96,6 +166,20 @@ function Tracks:ensure_folder(me)
   reaper.SetMediaTrackInfo_Value(tr, "I_CUSTOMCOLOR",
     reaper.ColorToNative(math.floor(rgb[1] * 255), math.floor(rgb[2] * 255), math.floor(rgb[3] * 255)) | 0x1000000)
   return reaper.GetTrackGUID(tr), true
+end
+
+-- After moving to another server: folders tagged with my old user id get my new one (and my email).
+function Tracks:retag_owner(old_id, me)
+  local n = 0
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if owner_of(tr) == old_id then
+      reaper.GetSetMediaTrackInfo_String(tr, OWNER_KEY, me.id, true)
+      if me.email then reaper.GetSetMediaTrackInfo_String(tr, EMAIL_KEY, me.email:lower(), true) end
+      n = n + 1
+    end
+  end
+  return n
 end
 
 function Tracks:chunk(guid)

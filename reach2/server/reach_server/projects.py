@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+import json
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -123,3 +124,38 @@ def remove_member(user_id: uuid.UUID, m: Member = Depends(project_access("viewer
         raise HTTPException(400, "the owner cannot be removed")
     db.delete(target)
     db.commit()
+
+
+# ---- Song settings (tempo map etc.) ---------------------------------------------------------------
+# Readable by every member; only the owner may change them. Optimistic concurrency via base_rev, so the owner
+# syncing from two machines can't silently overwrite one with the other.
+
+MAX_SETTINGS_BYTES = 64 * 1024
+
+
+def settings_json(p: Project) -> dict:
+    return {"rev": p.settings_rev, "data": p.settings}
+
+
+@router.get("/projects/{project_id}/settings")
+def get_settings(m: Member = Depends(project_access("viewer")), db: Session = Depends(get_db)):
+    return settings_json(db.get(Project, m.project_id))
+
+
+class SettingsBody(BaseModel):
+    base_rev: int = Field(ge=0)
+    data: dict
+
+
+@router.put("/projects/{project_id}/settings")
+def put_settings(body: SettingsBody, m: Member = Depends(project_access("viewer")), db: Session = Depends(get_db)):
+    if m.role != "owner":
+        raise HTTPException(403, "only the song's owner can change the song settings (tempo)")
+    if len(json.dumps(body.data)) > MAX_SETTINGS_BYTES:
+        raise HTTPException(413, "settings too large")
+    p = db.scalar(select(Project).where(Project.id == m.project_id).with_for_update())
+    if body.base_rev != p.settings_rev:
+        raise HTTPException(409, {"error": "stale_base", **settings_json(p)})
+    p.settings, p.settings_rev = body.data, p.settings_rev + 1
+    db.commit()
+    return settings_json(p)
