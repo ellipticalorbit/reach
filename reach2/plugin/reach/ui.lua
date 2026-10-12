@@ -31,6 +31,27 @@ function ui.reaper()
     end
   end
 
+  -- A change to someone else's track (not allowed unless you own the song).
+  function u:resolve_foreign(c)
+    local whose = "\"" .. c.name .. "\" belongs to " .. (c.owner or "someone else")
+    if c.kind == "created" then
+      local r = R.MB("You added \"" .. c.name .. "\" inside " .. (c.owner or "someone else") .. "'s folder. Only the song's " ..
+        "owner can add tracks there.\n\nYES = move it into your folder (and share it)\nNO = leave it there, not shared " ..
+        "(ask again next sync)", "Reach: not your folder", 4)
+      return r == 6 and "move" or "later"
+    elseif c.kind == "deleted" then
+      local r = R.MB("You removed " .. whose .. ". Only the song's owner can delete other people's tracks, so it " ..
+        "wasn't deleted for anyone else.\n\nYES = put it back\nNO = leave it removed here only (ask again next sync)",
+        "Reach: not your track", 4)
+      return r == 6 and "restore" or "later"
+    end
+    local r = R.MB("You " .. (c.kind == "moved" and "moved " or "changed ") .. whose .. ". Only the song's owner can " ..
+      "change other people's tracks, so this wasn't shared.\n\nYES = keep your version as a copy in your folder " ..
+      "(theirs is put back)\nNO = discard your change\nCANCEL = leave it for now (not shared; ask again next sync)",
+      "Reach: not your track", 3)
+    if r == 6 then return "copy" elseif r == 7 then return "discard" else return "later" end
+  end
+
   function u:confirm_deletes(names)
     local list = table.concat(names, "\n  ", 1, math.min(#names, 15)) .. (#names > 15 and "\n  ..." or "")
     return R.MB(#names .. " synced track(s) are no longer in your Reach folder:\n\n  " .. list ..
@@ -104,6 +125,13 @@ function ui.headless(opts)
   u.progress_log, u.progress_ended = {}, 0
   function u:progress(state) self.progress_log[#self.progress_log + 1] = state end
   function u:progress_end() self.progress_ended = self.progress_ended + 1 end
+  u.foreign_seen = {}
+  function u:resolve_foreign(c)
+    self.foreign_seen[#self.foreign_seen + 1] = c
+    local v = opts.foreign or "later"
+    if type(v) == "function" then return v(c) end
+    return v
+  end
   u.orphan_prompts = {}
   function u:confirm_orphans(names)
     self.orphan_prompts[#self.orphan_prompts + 1] = names

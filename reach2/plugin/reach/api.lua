@@ -85,6 +85,12 @@ function Api:put_settings(id, base_rev, data)
   return res
 end
 
+function Api:members(id) return self:call("GET", "/projects/" .. id .. "/members") end
+function Api:transfer(id, user_id) return self:call("POST", "/projects/" .. id .. "/transfer", { user_id = user_id }) end
+function Api:get_revision(id, guid, rev)
+  return self:call("GET", "/projects/" .. id .. "/tracks/" .. esc(guid) .. "/revisions/" .. math.floor(rev))
+end
+
 function Api:project(id) return self:call("GET", "/projects/" .. id) end
 function Api:changes(id, since) return self:call("GET", "/projects/" .. id .. "/changes?since=" .. (since or 0)) end
 function Api:tracks(id, state) return self:call("GET", "/projects/" .. id .. "/tracks?state=" .. (state or "live")) end

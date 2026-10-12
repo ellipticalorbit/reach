@@ -159,3 +159,22 @@ def put_settings(body: SettingsBody, m: Member = Depends(project_access("viewer"
     p.settings, p.settings_rev = body.data, p.settings_rev + 1
     db.commit()
     return settings_json(p)
+
+
+# ---- Ownership transfer -----------------------------------------------------------------------------
+
+class TransferBody(BaseModel):
+    user_id: uuid.UUID
+
+
+@router.post("/projects/{project_id}/transfer")
+def transfer_ownership(body: TransferBody, m: Member = Depends(project_access("owner")), db: Session = Depends(get_db)):
+    """The owner hands the song to another member, who becomes owner; the previous owner becomes an editor."""
+    if body.user_id == m.user_id:
+        raise HTTPException(400, "you already own this song")
+    target = db.get(Member, (m.project_id, body.user_id))
+    if target is None:
+        raise HTTPException(404, "that person isn't a member of this song")
+    target.role, m.role = "owner", "editor"
+    db.commit()
+    return {"owner": str(body.user_id)}

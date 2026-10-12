@@ -182,6 +182,19 @@ function Tracks:retag_owner(old_id, me)
   return n
 end
 
+-- Owner of each top-level Reach folder: guid -> { id, email }.
+function Tracks:folder_owners()
+  local out = {}
+  for i = 0, reaper.CountTracks(0) - 1 do
+    local tr = reaper.GetTrack(0, i)
+    if not reaper.GetParentTrack(tr) then
+      local id = owner_of(tr)
+      if id then out[reaper.GetTrackGUID(tr)] = { id = id, email = owner_email_of(tr) } end
+    end
+  end
+  return out
+end
+
 function Tracks:chunk(guid)
   local tr = guid_map()[guid]
   return tr and get_chunk(tr) or nil

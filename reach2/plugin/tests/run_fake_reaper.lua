@@ -147,11 +147,18 @@ local ok, err = xpcall(function()
 
   -- bob edits a track, alice receives it
   local bass_b = B.tracks[3]
-  B.R.GetSetMediaTrackInfo_String(bass_b, "P_NAME", "Bass v2", true) -- a UI rename leaves folder state alone
-  act(B, function() actions.sync_lq(PLUGIN) end)
+  B.R.GetSetMediaTrackInfo_String(bass_b, "P_NAME", "Bass v2", true) -- bob renames ALICE's track (he isn't the owner)
+  B.mb = {}
+  act(B, function() actions.sync_lq(PLUGIN) end)                -- default dialog answer YES = keep as a copy
+  local asked
+  for _, m in ipairs(B.mb) do if m.title:find("not your track", 1, true) then asked = m end end
+  check(asked and asked.msg:find("Bass v2", 1, true), "bob was asked about changing alice's track")
+  check(outline(B):find("alice|  Drums|  Bass|", 1, true) ~= nil, "alice's Bass put back on bob's side: " .. outline(B))
+  check(outline(B):find("bob|  Bass v2 (bob)", 1, true) ~= nil, "bob's version kept as a copy in his folder: " .. outline(B))
   act(A, function() actions.sync_lq(PLUGIN) end)
-  check(outline(A):find("alice|  Drums|  Bass v2|  Loose|bob", 1, true) ~= nil, "bob's rename reached alice: " .. outline(A))
-  check(#A.tracks == 6 and #B.tracks == 5, "no duplicate tracks created: " .. #A.tracks .. "/" .. #B.tracks)
+  check(outline(A):find("alice|  Drums|  Bass|  Loose|bob|  Bass v2 (bob)", 1, true) ~= nil,
+    "alice's track unchanged; she receives bob's copy: " .. outline(A))
+  check(#A.tracks == 7 and #B.tracks == 6, "no duplicate tracks created: " .. #A.tracks .. "/" .. #B.tracks)
 
   -- the HQ action runs end to end through the real action code (alice's Drums is a lossless wav)
   act(A, function() actions.sync_hq(PLUGIN) end)

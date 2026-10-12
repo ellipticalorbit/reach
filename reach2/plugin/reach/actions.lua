@@ -78,6 +78,9 @@ local function report(ui, s)
     s.pulled, s.pushed, s.deleted_remote, s.removed_here))
   local notes = {}
   if s.adopted and s.adopted > 0 then notes[#notes + 1] = s.adopted .. " track(s) moved into your Reach folder." end
+  if (s.copied or 0) > 0 then notes[#notes + 1] = s.copied .. " change(s) to other people's tracks were kept as copies in your folder." end
+  if (s.restored or 0) > 0 then ui:log(s.restored .. " track(s) put back to their owner's version.") end
+  if (s.moved_in or 0) > 0 then notes[#notes + 1] = s.moved_in .. " new track(s) moved into your folder." end
   if s.tempo_pushed then ui:log("Song tempo published.") end
   if s.tempo_pulled then ui:log("Song tempo updated from the server.") end
   if s.tempo_reverted then
@@ -199,6 +202,32 @@ function actions.change_server(dir)
         "(copied, and in the project notes):\n\n" .. r.join_code .. "\n\nCollaborators need to join with this code.")
     end
     ui:info("Reach: server changed", table.concat(notes, "\n\n"))
+  end)
+end
+
+function actions.transfer(dir)
+  run(dir, "Transfer ownership", function(engine, ui, store)
+    local st = store.project_load()
+    if not (st and st.project_id) then ui:info("Reach", "This project isn't linked to a song.") return end
+    engine:ensure_login()
+    local me = engine.api:me()
+    local others, lines = {}, {}
+    for _, m in ipairs(engine:members()) do
+      if m.user_id ~= me.id then
+        others[#others + 1] = m
+        lines[#lines + 1] = ("%d. %s%s"):format(#others, m.display_name, m.email and (" <" .. m.email .. ">") or "")
+      end
+    end
+    if #others == 0 then ui:info("Reach", "Nobody else has joined this song yet.") return end
+    ui:log("Members:\n" .. table.concat(lines, "\n"))
+    local pick = tonumber(ui:prompt("Transfer ownership (members are listed in the console)", "Number of the new owner", "") or "")
+    local target = pick and others[pick]
+    if not target then return end
+    if not ui:confirm("Reach: transfer ownership", "Make " .. target.display_name .. " the owner of this song?\n\n" ..
+        "They will be able to change anyone's tracks and the tempo, and see the join code. You become a regular " ..
+        "member who can only change the tracks in your own folder.") then return end
+    engine:transfer_ownership(target.user_id)
+    ui:info("Reach", target.display_name .. " now owns this song.")
   end)
 end
 

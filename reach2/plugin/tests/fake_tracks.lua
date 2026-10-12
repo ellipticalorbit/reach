@@ -151,6 +151,15 @@ function FT:ensure_folder(me)
   return g, true
 end
 
+function FT:folder_owners()
+  local out = {}
+  for _, r in ipairs(self.list) do
+    local id = not r.parent and owner_mark(r.chunk)
+    if id then out[r.guid] = { id = id, email = r.chunk:match("P_EXT:reach_owner_email%s+(%S+)") } end
+  end
+  return out
+end
+
 function FT:retag_owner(old_id, me)
   local n = 0
   for _, r in ipairs(self.list) do

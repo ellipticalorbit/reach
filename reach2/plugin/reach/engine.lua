@@ -30,6 +30,43 @@ end
 
 local function fail(msg) error({ msg = msg, user = true }, 0) end
 
+local function pk(parent) return parent or "" end
+
+local function locally_changed(l, b)
+  return b == nil or l.fp ~= b.fp or pk(l.parent) ~= pk(b.parent) or l.key ~= b.key
+end
+
+-- Full desired order (DFS by parent, then key) as {guid=, parent=} entries.
+local function build_order(nodes)
+  local children, roots = {}, {}
+  for g, n in pairs(nodes) do
+    if n.parent and nodes[n.parent] then
+      children[n.parent] = children[n.parent] or {}
+      table.insert(children[n.parent], g)
+    else
+      roots[#roots + 1] = g
+    end
+  end
+  local function sort(list)
+    table.sort(list, function(a, b)
+      if nodes[a].key ~= nodes[b].key then return nodes[a].key < nodes[b].key end
+      return a < b
+    end)
+  end
+  sort(roots)
+  local out = {}
+  local function visit(g, parent)
+    out[#out + 1] = { guid = g, parent = parent }
+    local ch = children[g]
+    if ch then
+      sort(ch)
+      for _, c in ipairs(ch) do visit(c, g) end
+    end
+  end
+  for _, g in ipairs(roots) do visit(g, nil) end
+  return out
+end
+
 local function new_state(server, project)
   return { server = server, project_id = project.id, name = project.name, join_code = project.join_code,
            seq = 0, base = {} }
@@ -335,11 +372,146 @@ function Engine:download_audio(pid, shas, variants, summary)
   end)
 end
 
+---------------------------------------------------------------------------------------------------
+-- Track ownership: a track belongs to whoever's Reach folder it sits under.
+---------------------------------------------------------------------------------------------------
+
+-- Top-level folder guid for `guid`, following `parent_of` (guid -> parent guid).
+local function root_of(guid, parent_of)
+  local g, hops = guid, 0
+  while parent_of(g) and hops < 1000 do g, hops = parent_of(g), hops + 1 end
+  return g
+end
+
+function Engine:_my_folder_guid(me)
+  for g, o in pairs(self.tracks:folder_owners()) do
+    if o.id == me.id or (me.email and o.email == me.email:lower()) then return g end
+  end
+  return nil
+end
+
+function Engine:_is_mine(root, owners, me)
+  local o = owners[root]
+  if not o then return false end
+  return o.id == me.id or (me.email ~= nil and o.email ~= nil and o.email == me.email:lower())
+end
+
+-- Split local changes into those I may push and those I may not (anything outside my own folder, now or
+-- before the change). Returns allowed_changed, allowed_deletes, blocked.
+function Engine:permission_filter(st, locals, changed, deletes, me)
+  local owners = self.tracks:folder_owners()
+  local function local_parent(g) return locals[g] and locals[g].parent end
+  local function base_parent(g) return st.base[g] and st.base[g].parent end
+  local function owner_name(root) return (locals[root] and locals[root].name) or (st.base[root] and st.base[root].name) or "someone" end
+  local ok_changed, ok_deletes, blocked = {}, {}, {}
+  for _, l in ipairs(changed) do
+    local now_root = root_of(l.guid, local_parent)
+    local b = st.base[l.guid]
+    local was_root = b and root_of(l.guid, base_parent) or nil
+    if not b then
+      if self:_is_mine(now_root, owners, me) then ok_changed[#ok_changed + 1] = l
+      else blocked[#blocked + 1] = { kind = "created", l = l, owner = owner_name(now_root) } end
+    elseif self:_is_mine(was_root, owners, me) and self:_is_mine(now_root, owners, me) then
+      ok_changed[#ok_changed + 1] = l
+    else
+      local kind = (was_root ~= now_root) and "moved" or "edited"
+      blocked[#blocked + 1] = { kind = kind, l = l, owner = owner_name(self:_is_mine(was_root, owners, me) and now_root or was_root) }
+    end
+  end
+  for _, d in ipairs(deletes) do
+    local root = root_of(d.guid, base_parent)
+    if self:_is_mine(root, owners, me) then ok_deletes[#ok_deletes + 1] = d
+    else blocked[#blocked + 1] = { kind = "deleted", d = d, owner = owner_name(root) } end
+  end
+  return ok_changed, ok_deletes, blocked
+end
+
+-- Ask about each held-back change and carry out the answers. Returns true if the project was changed.
+--   edited/moved: "copy" (my version becomes a new track in my folder, theirs is put back) | "discard" | "later"
+--   created:      "move" (into my folder) | "later"
+--   deleted:      "restore" | "later"
+function Engine:resolve_blocked(blocked, st, locals, me, my_folder, pid, summary)
+  local restores, copies, moves = {}, {}, {}
+  for _, b in ipairs(blocked) do
+    local name = b.l and b.l.name or b.d.name
+    local choice = self.ui:resolve_foreign({ kind = b.kind, name = name, owner = b.owner })
+    if b.kind == "edited" or b.kind == "moved" then
+      if choice == "copy" then copies[#copies + 1] = b.l restores[#restores + 1] = b.l.guid
+      elseif choice == "discard" then restores[#restores + 1] = b.l.guid end
+    elseif b.kind == "created" then
+      if choice == "move" then moves[#moves + 1] = b.l.guid end
+    elseif b.kind == "deleted" then
+      if choice == "restore" then restores[#restores + 1] = b.d.guid end
+    end
+  end
+  if #restores + #copies + #moves == 0 then return false end
+
+  -- Fetch the server's version of everything being put back (and any audio it needs).
+  local items, nodes = {}, {}
+  for g, l in pairs(locals) do nodes[g] = { parent = l.parent, key = l.key } end
+  local need, fetched = {}, {}
+  for _, g in ipairs(restores) do
+    local base = st.base[g]
+    local rev = self.api:get_revision(pid, g, base.rev)
+    fetched[g] = rev
+    for _, ref in ipairs(canon.file_refs(rev.chunk)) do
+      local sha = ref:match("^reach%-media://(%x+)%.ogg$")
+      if sha then need[#need + 1] = sha end
+    end
+  end
+  if #need > 0 then self:download_audio(pid, need, {}, summary) end
+  for _, g in ipairs(restores) do
+    items[#items + 1] = { guid = g, chunk = self:localize(fetched[g].chunk) }
+    nodes[g] = { parent = st.base[g].parent, key = st.base[g].key }
+  end
+  -- Copies and moves go to the end of my folder.
+  local last = 0
+  for _, n in pairs(nodes) do if n.parent == my_folder and n.key and n.key > last then last = n.key end end
+  for _, l in ipairs(copies) do
+    local newg = self.new_guid()
+    local chunk = canon.clone_chunk(l.chunk, l.guid, newg, self.new_guid)
+    chunk = canon.set_name(chunk, l.name .. " (" .. me.display_name .. ")")
+    last = last + 1
+    items[#items + 1] = { guid = newg, chunk = chunk }
+    nodes[newg] = { parent = my_folder, key = last }
+  end
+  for _, g in ipairs(moves) do
+    last = last + 1
+    nodes[g] = { parent = my_folder, key = last }
+  end
+
+  self.tracks:begin_batch()
+  local ok, err = pcall(function()
+    if #items > 0 then self.tracks:apply(items) end
+    self.tracks:arrange(build_order(nodes))
+  end)
+  self.tracks:end_batch()
+  if not ok then error(err, 0) end
+  for _, g in ipairs(restores) do      -- now identical to the server again
+    st.base[g].fp = sha256.hex(self:canonical(self.tracks:chunk(g)))
+  end
+  summary.restored = (summary.restored or 0) + #restores - #copies
+  summary.copied = (summary.copied or 0) + #copies
+  summary.moved_in = (summary.moved_in or 0) + #moves
+  return true
+end
+
+-- Hand the song to another member (owner only).
+function Engine:members()
+  local st = self.store.project_load()
+  return self.api:members(st.project_id)
+end
+
+function Engine:transfer_ownership(user_id)
+  local st = self.store.project_load()
+  return self.api:transfer(st.project_id, user_id)
+end
+
 -- Song tempo. Only the owner may change it: the owner's local tempo is published; anyone else's local change is
 -- put back to the song's tempo (REAPER then retimes their items back, which the musical form makes invisible).
 function Engine:sync_settings(st, pid, summary)
   if not (self.tracks.read_tempo and self.tracks.write_tempo) then return end
-  local role = self.api:project(pid).role
+  local role = self._role
   local ok, remote = pcall(self.api.get_settings, self.api, pid)
   if not ok then
     if type(remote) == "table" and remote.code == 404 then return end   -- older server without song settings
@@ -483,7 +655,6 @@ function Engine:upload_hq_companions(pid, summary)
   end
 end
 
-local function pk(parent) return parent or "" end
 
 -- Snapshot of synced tracks, with fingerprints and (re)assigned ordering keys.
 -- `remote` (optional): feed tracks not yet applied; new local tracks are keyed after any remote siblings.
@@ -528,40 +699,7 @@ function Engine:scan(st, remote)
   return map, order
 end
 
-local function locally_changed(l, b)
-  return b == nil or l.fp ~= b.fp or pk(l.parent) ~= pk(b.parent) or l.key ~= b.key
-end
 
--- Full desired order (DFS by parent, then key) as {guid=, parent=} entries.
-local function build_order(nodes)
-  local children, roots = {}, {}
-  for g, n in pairs(nodes) do
-    if n.parent and nodes[n.parent] then
-      children[n.parent] = children[n.parent] or {}
-      table.insert(children[n.parent], g)
-    else
-      roots[#roots + 1] = g
-    end
-  end
-  local function sort(list)
-    table.sort(list, function(a, b)
-      if nodes[a].key ~= nodes[b].key then return nodes[a].key < nodes[b].key end
-      return a < b
-    end)
-  end
-  sort(roots)
-  local out = {}
-  local function visit(g, parent)
-    out[#out + 1] = { guid = g, parent = parent }
-    local ch = children[g]
-    if ch then
-      sort(ch)
-      for _, c in ipairs(ch) do visit(c, g) end
-    end
-  end
-  for _, g in ipairs(roots) do visit(g, nil) end
-  return out
-end
 
 ---------------------------------------------------------------------------------------------------
 -- Sync
@@ -595,6 +733,7 @@ function Engine:_sync(opts)
   self._tracker:phase("Contacting the server")
   local me = api:me()
   st.me = me.id                    -- remembered so a later server move can re-tag my folder
+  self._role = api:project(pid).role      -- "owner" may change anything; others only their own folder
   self:sync_settings(st, pid, summary)   -- tempo first, so everything below uses the song's tempo map
   local feed = api:changes(pid, st.seq)
   local locals = self:scan(st, feed.tracks)
@@ -645,7 +784,14 @@ function Engine:_sync(opts)
         local newg = self.new_guid()
         local chunk = canon.clone_chunk(l.chunk, r.guid, newg, self.new_guid)
         chunk = canon.set_name(chunk, l.name .. " (conflict - " .. me.display_name .. ")")
-        extra[#extra + 1] = { guid = newg, chunk = chunk, parent = l.parent, key = l.key + 0.0001 }
+        local parent, key = l.parent, l.key + 0.0001
+        if self._role ~= "owner" then            -- non-owners can only add to their own folder
+          local mine = self:_my_folder_guid(me)
+          if mine and mine ~= l.parent then
+            parent, key = mine, 1e6 + #extra
+          end
+        end
+        extra[#extra + 1] = { guid = newg, chunk = chunk, parent = parent, key = key }
         apply[#apply + 1] = { guid = r.guid, r = r }
       else
         apply[#apply + 1] = { guid = r.guid, r = r }
@@ -745,16 +891,29 @@ function Engine:_sync(opts)
   if hq then self:upgrade_local_media(pid, summary) end
 
   -- 4. Work out what to push ---------------------------------------------------------------------
-  local ordered
-  locals, ordered = self:scan(st)
-  local changed, deletes = {}, {}
-  for _, l in ipairs(ordered) do
-    if locally_changed(l, st.base[l.guid]) then changed[#changed + 1] = l end
+  local ordered, changed, deletes
+  local function work_out()
+    locals, ordered = self:scan(st)
+    changed, deletes = {}, {}
+    for _, l in ipairs(ordered) do
+      if locally_changed(l, st.base[l.guid]) then changed[#changed + 1] = l end
+    end
+    for g, b in pairs(st.base) do
+      if not locals[g] then deletes[#deletes + 1] = { guid = g, rev = b.rev, name = b.name or g } end
+    end
+    table.sort(deletes, function(a, b) return a.guid < b.guid end)
   end
-  for g, b in pairs(st.base) do
-    if not locals[g] then deletes[#deletes + 1] = { guid = g, rev = b.rev, name = b.name or g } end
+  work_out()
+  -- Only the song owner may change other people's tracks. Anyone else's changes outside their own folder are
+  -- held back; the user decides what to do with them (copy into their folder / discard / later).
+  if self._role ~= "owner" then
+    local blocked
+    changed, deletes, blocked = self:permission_filter(st, locals, changed, deletes, me)
+    if #blocked > 0 and self:resolve_blocked(blocked, st, locals, me, my_folder, pid, summary) then
+      work_out()                                                   -- the project changed: look again
+      changed, deletes = self:permission_filter(st, locals, changed, deletes, me)   -- "later" ones stay held back
+    end
   end
-  table.sort(deletes, function(a, b) return a.guid < b.guid end)
   if #deletes > 0 then
     local names = {}
     for _, d in ipairs(deletes) do names[#names + 1] = d.name end

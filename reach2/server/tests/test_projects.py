@@ -89,3 +89,20 @@ def test_song_settings_owner_only_with_revisions(alice, bob, joined):
     stale = alice.put(f"/projects/{pid}/settings", json={"base_rev": 0, "data": {"tempo": {"bpm": 90}}})
     assert stale.status_code == 409 and stale.json()["detail"]["rev"] == 1
     assert alice.put(f"/projects/{pid}/settings", json={"base_rev": 1, "data": {"x": "y" * 70000}}).status_code == 413
+
+
+def test_transfer_ownership(alice, bob, make_person, joined):
+    pid = joined["id"]
+    bob_id, alice_id = bob.get("/me").json()["id"], alice.get("/me").json()["id"]
+    assert bob.post(f"/projects/{pid}/transfer", json={"user_id": alice_id}).status_code == 403   # not the owner
+    assert alice.post(f"/projects/{pid}/transfer", json={"user_id": alice_id}).status_code == 400  # already owner
+    carol = make_person("carol@example.com", "Carol")
+    carol_id = carol.get("/me").json()["id"]
+    assert alice.post(f"/projects/{pid}/transfer", json={"user_id": carol_id}).status_code == 404  # not a member
+    assert alice.post(f"/projects/{pid}/transfer", json={"user_id": bob_id}).json() == {"owner": bob_id}
+    roles = {m["display_name"]: m["role"] for m in bob.get(f"/projects/{pid}/members").json()}
+    assert roles == {"Alice": "editor", "Bob": "owner"}
+    assert bob.get(f"/projects/{pid}").json()["join_code"] == joined["join_code"]   # the owner sees the code
+    assert "join_code" not in alice.get(f"/projects/{pid}").json()
+    assert bob.put(f"/projects/{pid}/settings", json={"base_rev": 0, "data": {"tempo": {"bpm": 90}}}).status_code == 200
+    assert alice.put(f"/projects/{pid}/settings", json={"base_rev": 1, "data": {"tempo": {"bpm": 80}}}).status_code == 403

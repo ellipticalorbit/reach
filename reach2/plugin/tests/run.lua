@@ -500,6 +500,7 @@ local function machine(name, opts)
                            confirm_deletes = function(names) m.deleted_names = names return m.allow_deletes ~= false end,
                            orphans = function(names) return m.orphan_choice or "later" end,
                            confirm = function(_, msg) m.last_confirm = msg return m.confirm_answer ~= false end,
+                           foreign = function() return m.foreign_choice or "later" end,
                            new_project = function(song) m.new_project_for = song m.tracks.list, m.tracks.byguid = {}, {}
                              m.store.reset_project() return m.new_project_saved ~= false end })
   m.media = media_mod.new({ store = m.store, api = api, ffmpeg = opts.ffmpeg or FFMPEG,
@@ -615,11 +616,11 @@ test("owner keeps original wav locally; pulling bob's folder changes nothing els
 end)
 
 test("edits propagate to collaborators", function()
-  bob.tracks:edit(bob.tracks:find("Vocals").guid, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.5 0") end)
-  local s = bob:sync()
+  alice.tracks:edit(alice.tracks:find("Vocals").guid, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.5 0") end)
+  local s = alice:sync()
   eq(s.pushed, 1)
-  eq(alice:sync().pulled, 1)
-  truthy(alice.tracks:find("Vocals").chunk:find("VOLPAN 0.5 0", 1, true))
+  eq(bob:sync().pulled, 1)
+  truthy(bob.tracks:find("Vocals").chunk:find("VOLPAN 0.5 0", 1, true))
 end)
 
 test("collaborator adds a track under their folder; others receive it", function()
@@ -648,20 +649,21 @@ test("conflict: keep both makes a duplicate and loses nothing", function()
 end)
 
 test("conflict: keep mine overrides on the server", function()
-  local av, bv = alice.tracks:find("Guitar").guid, bob.tracks:find("Guitar").guid
+  -- the song owner (alice) and the track's owner (bob) both change bob's Bass
+  local av, bv = alice.tracks:find("Bass").guid, bob.tracks:find("Bass").guid
   alice.tracks:edit(av, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.7 0") end)
   bob.tracks:edit(bv, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.3 0") end)
-  alice:sync()
+  eq(alice:sync().pushed, 1, "the song owner may edit bob's track")
   bob.conflict_choice = "mine"
   eq(bob:sync().pushed, 1)
   eq(alice:sync().pulled, 1)
-  truthy(alice.tracks:find("Guitar").chunk:find("VOLPAN 0.3 0", 1, true), "bob's version won")
+  truthy(alice.tracks:find("Bass").chunk:find("VOLPAN 0.3 0", 1, true), "bob's version won")
 end)
 
 test("conflict: take theirs discards local edit", function()
   local av, bv = alice.tracks:find("Bass").guid, bob.tracks:find("Bass").guid
-  alice.tracks:edit(av, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.2 0") end)
-  bob.tracks:edit(bv, function(c) return c:gsub("VOLPAN 1 0", "VOLPAN 0.8 0") end)
+  alice.tracks:edit(av, function(c) return c:gsub("VOLPAN 0.3 0", "VOLPAN 0.2 0") end)
+  bob.tracks:edit(bv, function(c) return c:gsub("VOLPAN 0.3 0", "VOLPAN 0.8 0") end)
   bob:sync()
   alice.conflict_choice = "theirs"
   eq(alice:sync().pushed, 0)
@@ -1222,6 +1224,120 @@ test("change server: copying to a different server uploads everything, incl. aud
   local own_folders = 0
   for _, line in ipairs(owner.tracks:outline()) do if line == "migrator" then own_folders = own_folders + 1 end end
   eq(own_folders, 1, "owner still has exactly one folder")
+end)
+
+-- ---- Ownership -------------------------------------------------------------------------------------
+local own = {}
+
+test("ownership: setup (owner O; members A and B each with a track in their own folder)", function()
+  write_wav(ROOT .. "/none.wav", 1, 220)
+  own.o, own.a, own.b = machine("own-o"), machine("own-a"), machine("own-b")
+  own.o:run(function() own.o.eng:login() end)
+  local code = own.o:run(function() return own.o.eng:share("Ownership Song") end)
+  own.o:sync()
+  for _, m in ipairs({ own.a, own.b }) do
+    m:run(function() m.eng:login() end)
+    m:run(function() m.eng:join(code) end)
+  end
+  own.a.tracks:add_track("A1", (own.a:folder()))
+  own.b.tracks:add_track("B1", (own.b:folder()))
+  own.b.tracks:add_track("B2", (own.b:folder()))
+  local r1, r2, r3, r4 = own.a:sync(), own.b:sync(), own.a:sync(), own.o:sync()
+  truthy(own.a.tracks:find("B1") and own.o.tracks:find("A1"), "everyone has everything: a pushed " .. r1.pushed ..
+    " skipped " .. #r1.skipped .. " (" .. tostring(r1.skipped[1] and (r1.skipped[1].name .. ": " .. r1.skipped[1].reason)) .. ") | b pushed " .. r2.pushed .. " | a pulled " .. r3.pulled .. " | o pulled " .. r4.pulled ..
+    " | a outline " .. table.concat(own.a.tracks:outline(), ","))
+end)
+
+local function edit(m, name, from, to) m.tracks:edit(m.tracks:find(name).guid, function(c) return c:gsub(from, to) end) end
+local function vol(m, name) return m.tracks:find(name).chunk:match("VOLPAN (%S+)") end
+
+test("ownership: my own tracks push normally", function()
+  edit(own.a, "A1", "VOLPAN 1 0", "VOLPAN 0.6 0")
+  eq(own.a:sync().pushed, 1); eq(#own.a.ui.foreign_seen, 0, "no prompt")
+  own.b:sync(); eq(vol(own.b, "A1"), "0.6")
+end)
+
+test("ownership: editing someone else's track -> keep as a copy in my folder; theirs is put back", function()
+  edit(own.a, "B1", "VOLPAN 1 0", "VOLPAN 0.4 0")
+  own.a.foreign_choice = "copy"
+  local s = own.a:sync()
+  local seen = own.a.ui.foreign_seen[#own.a.ui.foreign_seen]
+  eq(seen.kind, "edited"); eq(seen.name, "B1")
+  eq(s.copied, 1); eq(s.pushed, 1, "only the copy is pushed")
+  eq(vol(own.a, "B1"), "1", "B1 is back to B's version")
+  local copy = own.a.tracks:find("B1 (own-a)")
+  truthy(copy, "copy exists"); eq(copy.chunk:match("VOLPAN (%S+)"), "0.4", "with my change")
+  eq(copy.parent, own.a.tracks:find("own-a").guid, "in my folder")
+  local bs = own.b:sync()
+  eq(vol(own.b, "B1"), "1", "B's track was never changed"); truthy(own.b.tracks:find("B1 (own-a)"), "B sees the copy")
+  eq(bs.pushed, 0)
+end)
+
+test("ownership: discard and later", function()
+  edit(own.a, "B2", "VOLPAN 1 0", "VOLPAN 0.1 0")
+  own.a.foreign_choice = "later"
+  local n = #own.a.ui.foreign_seen
+  eq(own.a:sync().pushed, 0, "not shared")
+  eq(vol(own.a, "B2"), "0.1", "but kept locally for now")
+  own.a:sync()
+  eq(#own.a.ui.foreign_seen, n + 2, "asked again on the next sync")
+  own.a.foreign_choice = "discard"
+  local s = own.a:sync()
+  eq(s.pushed, 0); eq(vol(own.a, "B2"), "1", "discarded: back to B's version")
+  local m = #own.a.ui.foreign_seen
+  own.a:sync()
+  eq(#own.a.ui.foreign_seen, m, "nothing left to ask about")
+end)
+
+test("ownership: a new track in someone else's folder is moved into mine", function()
+  own.a.tracks:add_track("A-in-B", own.a.tracks:find("own-b").guid)
+  own.a.foreign_choice = "move"
+  local s = own.a:sync()
+  eq(own.a.ui.foreign_seen[#own.a.ui.foreign_seen].kind, "created")
+  eq(s.moved_in, 1); eq(s.pushed, 1)
+  eq(own.a.tracks:find("A-in-B").parent, own.a.tracks:find("own-a").guid)
+  own.b:sync()
+  eq(own.b.tracks:find("A-in-B").parent, own.b.tracks:find("own-a").guid, "everyone sees it in A's folder")
+end)
+
+test("ownership: deleting or moving someone else's track", function()
+  own.a.tracks:remove(own.a.tracks:find("B2").guid)
+  own.a.foreign_choice = "restore"
+  local s = own.a:sync()
+  eq(own.a.ui.foreign_seen[#own.a.ui.foreign_seen].kind, "deleted")
+  eq(s.removed_here, 0, "not deleted for anyone")
+  truthy(own.a.tracks:find("B2"), "put back"); eq(own.a.tracks:find("B2").parent, own.a.tracks:find("own-b").guid)
+  -- moving B's track into my folder
+  local b1 = own.a.tracks:find("B1")
+  b1.parent = own.a.tracks:find("own-a").guid
+  own.a.foreign_choice = "discard"
+  own.a:sync()
+  eq(own.a.ui.foreign_seen[#own.a.ui.foreign_seen].kind, "moved")
+  eq(own.a.tracks:find("B1").parent, own.a.tracks:find("own-b").guid, "moved back")
+  eq(#own.b:sync().conflicted, 0)
+end)
+
+test("ownership: the song owner can change anyone's tracks", function()
+  edit(own.o, "B1", "VOLPAN 1 0", "VOLPAN 0.9 0")
+  local s = own.o:sync()
+  eq(s.pushed, 1); eq(#own.o.ui.foreign_seen, 0, "no prompt for the owner")
+  own.b:sync(); eq(vol(own.b, "B1"), "0.9")
+end)
+
+test("ownership: transferring the song moves those rights", function()
+  local members = own.o:run(function() return own.o.eng:members() end)
+  local a_id
+  for _, m in ipairs(members) do if m.display_name == "own-a" then a_id = m.user_id end end
+  own.o:run(function() own.o.eng:transfer_ownership(a_id) end)
+  own.a:sync()                                                   -- pick up B1 = 0.9 first
+  edit(own.a, "B1", "VOLPAN 0.9 0", "VOLPAN 0.8 0")
+  local n = #own.a.ui.foreign_seen
+  eq(own.a:sync().pushed, 1, "the new owner edits B's track freely"); eq(#own.a.ui.foreign_seen, n)
+  own.o:sync()
+  edit(own.o, "B1", "VOLPAN 0.8 0", "VOLPAN 0.7 0")
+  own.o.foreign_choice = "discard"
+  eq(own.o:sync().pushed, 0, "the previous owner is now restricted")
+  eq(own.o.ui.foreign_seen[#own.o.ui.foreign_seen].kind, "edited")
 end)
 
 -- ---- Tempo -----------------------------------------------------------------------------------------
