@@ -37,8 +37,10 @@ def track_name(chunk: str) -> str:
 
 def validate_chunk(chunk: str, guid: str, max_bytes: int) -> list[tuple[str, str]]:
     """Returns the sorted (sha256, ext) media references in the chunk. Raises ChunkError."""
-    if len(chunk.encode("utf-8")) > max_bytes:
-        raise ChunkError("chunk too large")
+    size = len(chunk.encode("utf-8"))
+    if size > max_bytes:
+        raise ChunkError(f"track data too large ({size // (1024 * 1024)} MB; this server accepts up to "
+                         f"{max_bytes // (1024 * 1024)} MB per track)")
     if "\x00" in chunk:
         raise ChunkError("chunk contains NUL")
     stripped = chunk.strip()

@@ -1015,16 +1015,32 @@ function Engine:_sync(opts)
     for h in pairs(wanted) do hashes[#hashes + 1] = h end
     table.sort(hashes)
     upload_blobs(hashes)
-    self._tracker:phase("Saving tracks to the server")
-    local result, missing = api:push(pid, push_items)
-    if not result then -- server lost track of a blob (e.g. purged): re-upload and retry once
-      upload_blobs(missing)
-      result, missing = api:push(pid, push_items)
-      if not result then fail("The server is missing audio files that could not be uploaded.") end
+    -- Send in batches of at most ~8 MB of track data (MIDI-heavy tracks can be several MB each).
+    local batches, cur, size = {}, {}, 0
+    for _, it in ipairs(push_items) do
+      local n = it.chunk and #it.chunk or 0
+      if #cur > 0 and (size + n > 8 * 1024 * 1024 or #cur >= 100) then batches[#batches + 1] = cur cur, size = {}, 0 end
+      cur[#cur + 1] = it
+      size = size + n
     end
-    for _, res in ipairs(result.results) do
+    if #cur > 0 then batches[#batches + 1] = cur end
+    self._tracker:phase("Saving tracks to the server", { items = #batches > 1 and #batches or nil })
+    local all = {}
+    for _, batch in ipairs(batches) do
+      local result, missing = api:push(pid, batch)
+      if not result then -- server lost track of a blob (e.g. purged): re-upload and retry once
+        upload_blobs(missing)
+        result, missing = api:push(pid, batch)
+        if not result then fail("The server is missing audio files that could not be uploaded.") end
+      end
+      for _, r in ipairs(result.results) do all[#all + 1] = r end
+      if #batches > 1 then self._tracker:item_done() end
+    end
+    for _, res in ipairs(all) do
       local l = push_by_guid[res.guid]
-      if res.status == "conflict" then
+      if res.status == "rejected" then        -- the server couldn't take this one track (e.g. too large)
+        summary.skipped[#summary.skipped + 1] = { name = (l and l.name) or res.guid, reason = res.reason or "rejected" }
+      elseif res.status == "conflict" then
         summary.conflicts = summary.conflicts + 1
         summary.conflicted[#summary.conflicted + 1] = (l and l.name) or res.guid
       elseif l then

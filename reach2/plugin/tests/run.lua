@@ -1481,6 +1481,29 @@ test("tempo: the owner changing it on two computers asks which to keep", functio
   eq(o.tracks.tempo.bpm, 140, "the kept tempo wins everywhere")
 end)
 
+test("MIDI-heavy tracks: multi-MB tracks push fine, and many of them are sent in batches", function()
+  local m = machine("midi")
+  m:run(function() m.eng:login() end)
+  m:run(function() m.eng:share("MIDI Song") end)
+  local f = m:folder()
+  local events = {}
+  for i = 1, 250000 do events[#events + 1] = "      E " .. (i % 480) .. " 90 3c 60" end    -- ~5 MB of notes
+  local midi = table.concat(events, "\n")
+  for i = 1, 3 do
+    local g = m.tracks:add_track("Keys " .. i, f)
+    m.tracks:edit(g, function(c) return c:gsub("\n>$", "\n  <ITEM\n    POSITION " .. i .. "\n    LENGTH 4\n" ..
+      "    <SOURCE MIDI\n      HASDATA 1 960 QN\n" .. midi .. "\n    >\n  >\n>") end)
+  end
+  local s = m:sync()
+  eq(#s.skipped, 0, s.skipped[1] and s.skipped[1].reason or "")
+  eq(s.pushed, 4, "folder + three ~5 MB MIDI tracks")
+  local other = machine("midi-listener")
+  other:run(function() other.eng:login() end)
+  other:run(function() other.eng:join(m.store.project_load().join_code or m:run(function() return m.eng:show_join_code() end)) end)
+  eq(other:sync().pulled, 4)
+  truthy(#other.tracks:find("Keys 2").chunk > 4 * 1024 * 1024, "the whole MIDI arrived")
+end)
+
 test("same user in a second project reuses their existing folder instead of creating another", function()
   local again = machine("alice-second", { email = alice.email })
   again:run(function() again.eng:login() end)

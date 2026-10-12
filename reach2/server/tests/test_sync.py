@@ -167,14 +167,42 @@ def test_blobs_not_shared_across_projects(alice, bob, joined):
 
 def test_chunk_validation(alice, joined):
     pid, g = joined["id"], new_guid()
+
+    def status(*tracks):
+        r = push(alice, pid, *tracks)
+        assert r.status_code == 200, r.text
+        return [(x["status"], x.get("reason", "")) for x in r.json()["results"]]
+
     bad_path = f'<TRACK {g}\nNAME x\n<ITEM\n<SOURCE WAVE\nFILE "/Users/alice/secret.wav"\n>\n>\n>'
-    assert push(alice, pid, upsert(g, bad_path)).status_code == 422
-    assert push(alice, pid, upsert(g, make_chunk(new_guid()))).status_code == 422  # guid mismatch
-    assert push(alice, pid, upsert(g, "<NOTATRACK>")).status_code == 422
-    assert push(alice, pid, upsert("not-a-guid", make_chunk(g))).status_code == 422
-    assert push(alice, pid, {"guid": g, "op": "upsert", "base_rev": 0}).status_code == 422
-    assert push(alice, pid, upsert(g, make_chunk(g)), upsert(g, make_chunk(g))).status_code == 422
+    assert status(upsert(g, bad_path))[0][0] == "rejected"
+    assert status(upsert(g, make_chunk(new_guid())))[0][0] == "rejected"                    # guid mismatch
+    assert status(upsert(g, "<NOTATRACK>"))[0][0] == "rejected"
+    assert status(upsert("not-a-guid", make_chunk(g)))[0][0] == "rejected"
+    assert status({"guid": g, "op": "upsert", "base_rev": 0})[0][0] == "rejected"
+    assert push(alice, pid, upsert(g, make_chunk(g)), upsert(g, make_chunk(g))).status_code == 422   # client bug
     assert alice.get(f"/projects/{pid}/changes").json()["tracks"] == []  # nothing applied
+
+
+def test_a_rejected_track_does_not_block_the_others(alice, joined, app):
+    pid, big, ok = joined["id"], new_guid(), new_guid()
+    app.state.settings.max_chunk_bytes = 3 * 1024 * 1024
+    midi = "\n".join(f"E {i} 90 3c 60" for i in range(400000))                         # ~6 MB of MIDI events
+    big_chunk = make_chunk(big).replace(">", "<SOURCE MIDI\n" + midi + "\n>\n>", 1)
+    r = push(alice, pid, upsert(big, big_chunk), upsert(ok, make_chunk(ok, "Fine")))
+    assert r.status_code == 200
+    res = {x["guid"]: x for x in r.json()["results"]}
+    assert res[big]["status"] == "rejected" and "too large" in res[big]["reason"] and "3 MB" in res[big]["reason"]
+    assert res[ok]["status"] == "accepted"
+    assert [t["name"] for t in alice.get(f"/projects/{pid}/changes").json()["tracks"]] == ["Fine"]
+
+
+def test_big_midi_tracks_fit_by_default(alice, joined):
+    pid, g = joined["id"], new_guid()
+    midi = "\n".join(f"E {i} 90 3c 60" for i in range(400000))                         # ~6 MB
+    chunk = make_chunk(g).replace(">", "<SOURCE MIDI\n" + midi + "\n>\n>", 1)
+    r = push(alice, pid, upsert(g, chunk))
+    assert r.json()["results"][0]["status"] == "accepted"
+    assert len(alice.get(f"/projects/{pid}/changes").json()["tracks"][0]["chunk"]) == len(chunk)
 
 
 def test_guid_case_normalised(alice, joined):
@@ -190,7 +218,7 @@ def test_limits(alice, joined, app):
     assert push(alice, pid, upsert(a, make_chunk(a))).status_code == 200
     assert push(alice, pid, upsert(b, make_chunk(b))).status_code == 413
     app.state.settings.max_chunk_bytes = 10
-    assert push(alice, pid, upsert(a, make_chunk(a), base_rev=1)).status_code == 422
+    assert push(alice, pid, upsert(a, make_chunk(a), base_rev=1)).json()["results"][0]["status"] == "rejected"
 
 
 def test_concurrent_pushes_get_distinct_seqs(alice, bob, joined):
@@ -220,8 +248,8 @@ def test_chunk_guid_forms(alice, joined):
     h = new_guid()
     assert push(alice, pid, upsert(h, f'<TRACK\nNAME "y"\nTRACKID {h}\n>')).status_code == 200  # REAPER API style
     k = new_guid()
-    assert push(alice, pid, upsert(k, '<TRACK\nNAME "z"\n>')).status_code == 422                # no guid anywhere
-    assert push(alice, pid, upsert(k, f'<TRACK\nTRACKID {new_guid()}\n>')).status_code == 422    # wrong guid
+    assert push(alice, pid, upsert(k, '<TRACK\nNAME "z"\n>')).json()["results"][0]["status"] == "rejected"   # no guid
+    assert push(alice, pid, upsert(k, f'<TRACK\nTRACKID {new_guid()}\n>')).json()["results"][0]["status"] == "rejected"
 
 
 def ogg_chunk(guid, h, name="Raw"):
@@ -232,7 +260,7 @@ def test_chunks_cannot_reference_wav_directly(alice, joined):
     pid, g = joined["id"], new_guid()
     h = upload(alice, pid, wav_bytes())
     wav_ref = f'<TRACK\nTRACKID {g}\n<ITEM\n<SOURCE WAVE\nFILE "reach-media://{h}.wav"\n>\n>\n>'
-    assert push(alice, pid, upsert(g, wav_ref)).status_code == 422          # only Ogg refs are allowed
+    assert push(alice, pid, upsert(g, wav_ref)).json()["results"][0]["status"] == "rejected"   # only Ogg refs
     as_ogg = f'<TRACK\nTRACKID {g}\n<ITEM\n<SOURCE VORBIS\nFILE "reach-media://{h}.ogg"\n>\n>\n>'
     r = push(alice, pid, upsert(g, as_ogg))                                  # blob is a wav -> not a valid ogg ref
     assert r.status_code == 422 and r.json()["detail"]["missing"] == [h]

@@ -114,7 +114,11 @@ end
 
 -- Returns data or, for a 422 missing_blobs reply, nil + list of missing hashes.
 function Api:push(id, tracks)
-  local data, status = self:call("POST", "/projects/" .. id .. "/push", { tracks = tracks }, { ok = { [422] = true } })
+  -- Big pushes (MIDI-heavy tracks) get time in proportion to their size, assuming at least ~100 KB/s.
+  local bytes = 0
+  for _, t in ipairs(tracks) do bytes = bytes + (t.chunk and #t.chunk or 0) end
+  local data, status = self:call("POST", "/projects/" .. id .. "/push", { tracks = tracks },
+    { ok = { [422] = true }, timeout = 120 + math.floor(bytes / (100 * 1024)) })
   if status == 422 then
     local d = data and data.detail
     if type(d) == "table" and d.error == "missing_blobs" then return nil, d.missing end

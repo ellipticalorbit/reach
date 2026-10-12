@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Limits (public-facing hardening)
     max_blob_bytes: int = 2 * GiB  # raw WAV recordings can be large
-    max_chunk_bytes: int = 2 * MiB
+    max_chunk_bytes: int = 32 * MiB  # MIDI notes and plugin states live inside track chunks
     project_quota_bytes: int | None = 5 * GiB  # None = unlimited
     max_projects_per_user: int = 20
     max_tracks_per_project: int = 500

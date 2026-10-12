@@ -204,8 +204,9 @@ def push(body: PushBody, request: Request, m: Member = Depends(project_access("e
     if len(body.tracks) > s.max_push_tracks:
         raise HTTPException(413, "too many tracks in one push")
 
-    # Validate everything up front: a malformed push changes nothing.
-    items = []
+    # Validate each track first. A track that can't be accepted (too large, malformed) is rejected on its own,
+    # with the reason, and doesn't stop the others.
+    items, rejected = [], []
     seen = set()
     for tp in body.tracks:
         try:
@@ -218,7 +219,8 @@ def push(body: PushBody, request: Request, m: Member = Depends(project_access("e
                 refs = validate_chunk(tp.chunk, guid, s.max_chunk_bytes)
                 hashes = sorted({sha for sha, _ in refs})
         except ChunkError as e:
-            raise HTTPException(422, f"{tp.guid}: {e}")
+            rejected.append({"guid": tp.guid, "status": "rejected", "reason": str(e)})
+            continue
         if guid in seen:
             raise HTTPException(422, f"duplicate track in push: {guid}")
         seen.add(guid)
@@ -278,7 +280,7 @@ def push(body: PushBody, request: Request, m: Member = Depends(project_access("e
         results.append({"guid": guid, "status": "accepted", "rev": r.rev, "seq": r.seq})
 
     db.commit()
-    return {"seq": p.seq, "results": results}
+    return {"seq": p.seq, "results": rejected + results}
 
 
 def _rev_json(r: TrackRevision, authors: dict, full: bool) -> dict:
